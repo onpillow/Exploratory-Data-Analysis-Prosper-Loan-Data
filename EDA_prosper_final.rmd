@@ -1,0 +1,2449 @@
+---
+title: "Exploration of Loan Dataset from Prosper"
+author: "Lorna Yen"
+date: "December 5, 2018"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+_____________
+
+# Introduction
+
+Peer-to-peer lending platform industry is thriving in recent years. 
+Thousnads of investors are making profit through these platforms; thousnads of 
+borrowers are getting money more easily. Although these platforms provide credit
+score and basic information of borrowers to ensure these lending tradings are 
+in a safety trading environment, there are still thousnads of people under risk 
+of losing money.
+
+Even Prosper, a leading financial peer-to-peer lending platform company, still 
+suffered credit risk issues before. But after their reconstruction and new credit 
+system launched, the credit risk has been improved. It's leading me want to find 
+out stories behind the scenes. Here I will explore this Prosper dataset and try 
+to find out some patterns behind borrowers properties, different Rating type, 
+and how they link to default loan or completed loan.
+
+The Prosper dataset(last updated on 03/11/2014) contains four kinds of variable categories during 2005 to 2014:
+
+- **Loan Status** : The status of the loan list such as Cancelled, Chargedoff, Completed, Current, Defaulted, FinalPaymentInProgress, PastDue.
+
+- **Borrower Data** : Basic properties about borrowers such as credit score, 
+occupation, employment status, etc.
+
+- **Loan Data** : Basic properties about the loan such as length of the 
+loan(term), Borrower APR, etc.
+
+- **Credit Risk Matrices** : Matrices measured the risk of loans, such as 
+Credit grade, Prosper Score, bank card utilization, etc.
+
+## Initial Question of Interest:
+
+What properties and risk factors are connected to defaulted loan? Completed 
+loan status?
+
+# General Dataset Properties
+
+```{r  echo=FALSE, message=FALSE, warning=FALSE}
+
+knitr::opts_chunk$set(fig.width=9,fig.height=5,fig.path='Figs/',
+                      fig.align='center',tidy=TRUE,
+                      echo=FALSE,warning=FALSE,message=FALSE)
+# chunk option dev="svg" produces very large vector graphics files
+knitr::opts_chunk$set(dev="svg")
+# chunk option dev="png" is the default raster graphics format for HTML output
+knitr::opts_chunk$set(dev="png")
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+
+# Load all necessary packages
+
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(ggthemes)
+library(gridExtra)
+library(RColorBrewer)
+library(knitr)
+library(GGally)
+library(psych)
+library('corrplot')
+```
+
+```{r echo=FALSE, Load_the_Data}
+# Load the Data
+
+loan <- read.csv('C:/Users/user/rPubs/prosperLoanData.csv', sep = ',')
+
+```
+
+```{r echo=FALSE, dataset_dimension}
+#find the dimension of the dataset
+dim(loan)
+```
+
+The dataset contains 81 variables and 113,979 observation for each loan list 
+data.
+
+# Univariate Plots Section
+
+## 1. Loan Status
+
+First, let's take a look in the Loan Status variables:
+
+```{r echo=FALSE, loan_status_table}
+# count each categroy of LoanStatus
+
+table(loan$LoanStatus)
+
+```
+
+We see that there are 10 loan status. Observe that there are six kinds 
+of `PastDue` classified by different number of due days, since I only care 
+about whether a loan is under high risk or not, to be more specific, I combined 
+loans under 121 days of `PastDue` into one variable: `PastDue`.
+
+Besides, since the definition of `Chargedoff` is--- a loan reaches 121 days 
+past due. So we can see there are still 16 observations in over 120 days 
+`past due` catagory, so I combined the `Past Due (>120 days)` into `Chargedoff` variable.
+
+Furthermore, the number of observations in `FinalPaymentInProgress` and 
+`Cancelled` are very small, and based on their definitions, the loan of `FinalPaymentInProgress` is almost completed, the `Cancelled` loan will not 
+be listed in the future, so I classified both of them into `Completed`.
+
+The combination result becomes as follows:
+```{r echo=FALSE, combine_varibles}
+#create list that I want to combine into Chargedoff variable
+Chargedoff <- c("Past Due (>120 days)",
+                "Chargedoff")
+#create list that I want to combine into PastDue variable
+PastDue <- c("Past Due (1-15 days)",
+             "Past Due (16-30 days)",
+             "Past Due (31-60 days)",
+             "Past Due (61-90 days)",
+             "Past Due (91-120 days)")
+#create list that I want to combine into Completed variable
+Completed <- c("FinalPaymentInProgress",
+               "Cancelled")
+#change LoanStatus format to string
+loan$LoanStatus <- as.character(loan$LoanStatus)
+# start change each variable
+loan$LoanStatus[loan$LoanStatus %in% Chargedoff] <- "Chargedoff"
+loan$LoanStatus[loan$LoanStatus %in% PastDue] <- "PastDue"
+loan$LoanStatus[loan$LoanStatus %in% Completed] <- "Completed"
+loan$LoanStatus <- factor(loan$LoanStatus, 
+                          levels = c("Completed",  "Current", 
+                                     "PastDue", "Chargedoff", "Defaulted"), 
+                          ordered = T)
+# print out the change result
+table(loan$LoanStatus)
+
+```
+
+And the bar chart of loan statust:
+
+```{r echo=FALSE, loan_status, dpi=36, out.width="700px", out.height="700px"}
+# plot LoanStatus bar chart
+ggplot(aes(x= LoanStatus, y = ..count../sum(..count..)), data = loan) + 
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%"))
+            , vjust=-0.5)
+
+```
+
+Furthermore, I create a variable `CompletedOrRisk` to label a loan is high risk(including pastdue, chargeoff, default) or completed to simplify the status variable, because that's the two categories that I only care about. And I 
+created a sub set `sub_loan` which only contains the `CompletedOrRisk` in 
+`Completed` and `HighRisk` by removing the `Current` loans.
+
+```{r echo=FALSE, loan_status_final}
+# create CompletedOrRisk column
+
+loan$CompletedOrRisk<- ifelse(
+  loan$LoanStatus %in% c("PastDue","Chargedoff", "Defaulted"), 
+"HighRisk", as.character(loan$LoanStatus))
+
+# subset the data only contain Completed and HighRisk loan
+sub_loan<- subset(loan, CompletedOrRisk!= "Current")
+dim(sub_loan)
+
+```
+
+There 57,361 observation left in the subset.
+
+```{r echo=FALSE, loan_status_final_plot, dpi=36, out.width="700px", out.height="700px"}
+# plot bar chart for CompletedOrRisk
+ggplot(aes(x= CompletedOrRisk), data = sub_loan) + 
+  geom_bar() +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.5)
+
+# plot proportion for each loan status
+ggplot(aes(x= CompletedOrRisk, y = ..count../sum(..count..)), data = sub_loan) + 
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-0.5) +
+  labs(x = "Loan Status", y = "Percentage")
+
+```
+
+Group it by loans before 2009 and after 2009: 
+
+```{r echo=FALSE, loan_status_final_byyear, fig.height =5, dpi=36, out.width="700px", out.height="700px"}
+
+# plot Loan Status before 2009 in Percentage
+gr1 <- ggplot(aes(x= CompletedOrRisk, y = ..count../sum(..count..)), 
+              data = subset(sub_loan, CreditGrade != "" )) + 
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-0.5) +
+  labs(x = "Loan Status", y = "Percentage") +
+  ggtitle("Loan Status before 2009")
+
+# plot Loan Status before 2009 in Percentage
+gr2 <- ggplot(aes(x= CompletedOrRisk, y = ..count../sum(..count..)), 
+              data = subset(sub_loan, CreditGrade == "" )) + 
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), vjust=-0.5) +
+  labs(x = "Loan Status", y = "Percentage") +
+  ggtitle("Loan Status after 2009")
+
+grid.arrange(gr1, gr2 ,ncol = 2)
+```
+
+Here we can see that:
+
+- The proportion of current loan is about 50%, meaning that there are about 
+half of loan data that we are not sure whether they are defaulted or completed.
+
+- There are about 34% completed loan.
+
+- About 17% of charge off loan and defaulted loan in the dataset, which means 
+in the duration of the dataset it roughly have about 17% high risk loan that 
+investor may loss money.
+
+- Among the loans which have status in `Completed` or `HighRisk`, the 
+proporation of high risk loans have decreased after 2009 from about 37% to 30%.
+
+## 2. Loan Data
+
+### Borrower Rate
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, BorrowerRate, dpi=36, out.width="600px", out.height="800px"}
+# make BorrowerRate summary table
+summary(loan$BorrowerRate)
+# plot BorrowerRate histogram
+ggplot(aes(x = BorrowerRate), data = loan) +
+  geom_histogram(binwidth = 0.005)
+```
+
+Above table and graph show the borrow rate is about 20% on average in the whole 
+data set, the range is about 5%-35%, with slightly right-skewed except that it 
+has a spike around 32%. 
+
+Zooming in the borrower rate with each loan status:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, rate_status, dpi=36, out.width="700px", out.height="800px"}
+# plot plot BorrowerRate histogram and facet with loan status
+ggplot(aes(x = BorrowerRate), data = sub_loan) + 
+  geom_histogram(binwidth = 0.005) +
+  facet_wrap(~CompletedOrRisk, ncol = 2)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, rate_badloan_summary}
+# create a summary table of CompletedOrRisk column clasified by it's value
+by(sub_loan$BorrowerRate, sub_loan$CompletedOrRisk, summary)
+```
+
+On average, the borrower rate with high risk loan are around 23%, with spikes 
+around 32%; and the rate with completed loan are around 19% with a slightly right-skewed, and spikes around 32% as well. **In general, the completed loans
+have lower average borrower interest rate than high risks'.** 
+
+I wonder what kind of loan cause such a 32% of borrower rate exists in both 
+completed and high risk loans. I guess maybe such a high rate occurred in 
+specific year because interest rate is highly sensitive with different financial condition in different year.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, rate_37}
+
+# find the most frequent interest rate and it's frequency
+sort(table(loan$BorrowerRate), decreasing=TRUE)[1:5]
+```
+
+The table above shows that the most frequent interest rate is 31.77% with 
+3672 counts, the second is 35% with 1905 counts, and if we group the interest 
+rate by year:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, rate_byyear, dpi=36, out.width="800px", out.height="800px"}
+
+# create a year column
+loan$LoanOriginationDate <- as.Date(loan$LoanOriginationDate)
+
+# transfer it to numeric
+loan$year <- as.numeric(format(loan$LoanOriginationDate, format = "%Y"))
+
+# make year column as factor
+loan$year <- factor(loan$year)
+
+# plot BorrowerRate by year
+ggplot(aes(x = BorrowerRate), data = loan) +
+  geom_histogram(binwidth = 0.005) +
+  facet_wrap(~year)
+
+```
+
+Here we can see that the interest rate around 32% appeared mostly in 2011 and 
+2012 with roughly 2000, 3600 counts respectively. And apparently, we can see
+the same spiking pattern around 30 % and 35% in 2007 and 2008 as well. 
+
+I flipped through the Prosper 2012 Annual Report, there listed a table shows 
+borrower interest rate is based on the **Prosper Rating**. For rating the 
+highest risk, HR, the corresponding interest rate was ranging from 
+30.79% to 31.77%.
+
+Great. Here I assume that these spiked interest rates in 2007, 2008, 2011 
+and 2012 were loans which be rated as HR or high risk credit. It makes sense 
+because in these years there were global crisis occurred and it probably lead to 
+increase the number of risker due to these rating are based on credit records
+of them in these year.
+
+I also want to check out if the borrower rate is classified by different 
+credit rating: good rating with lower borrower rate; bad rating with higher 
+borrower rate.
+
+First, I observe the subset with loan in both completed and high risk, 
+excluding current loan in each year:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, rate_subset_rating, dpi=36, out.width="800px", out.height="800px"}
+
+# create a year column
+sub_loan$LoanOriginationDate <- as.Date(sub_loan$LoanOriginationDate)
+
+# transfer it to numeric
+sub_loan$year <- as.numeric(format(sub_loan$LoanOriginationDate, format = "%Y"))
+
+# make year column as factor
+sub_loan$year <- factor(sub_loan$year)
+
+# plot BorrowerRate by year with subdata 
+# only containing HighRisk and Completed loan
+ggplot(aes(x = BorrowerRate), data = sub_loan) +
+  geom_histogram(binwidth = 0.005) +
+  facet_wrap(~year)
+```
+
+We can see that there are just few numbers completed or high risk loan in 2014.
+
+Next, I group the interest rate with different Prosper Rating in each year:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, rate_plot_rating, fig.width= 14, fig.height=6, dpi=40, out.width="900px", out.height="850px"}
+
+# plot distribution of BorrowerRate after 2009
+# and clasified by Prosper Rating
+gr3 <- ggplot(aes(x = BorrowerRate), data = sub_loan) +
+  geom_histogram(aes(color =ProsperRating..Alpha.), binwidth = 0.005) +
+  facet_wrap(~year, ncol =4) +
+  ggtitle("Loan after 2009")
+
+# plot distribution of BorrowerRate before 2009
+# and clasified by Prosper Rating
+gr4 <- ggplot(aes(x = BorrowerRate), data = sub_loan) +
+  geom_histogram(aes(color =CreditGrade), binwidth = 0.005) +
+  facet_wrap(~year, ncol =4) +
+  ggtitle("Loan before 2009")
+
+grid.arrange(gr3, gr4 ,ncol = 2)
+
+```
+
+We can see the rating color distribution are align with different borrower rate 
+and has a significant color spectrum across each borrower rates-- lower 
+interest rates are with good credit ratings, and higher interest rates are 
+with worse ratings. We can see the spiked-rate are primary in pink color (which represents HR rating). 
+
+The result makes sense because just as mentioned before, the borrower 
+interest rate partially determined by [Prosper Rating]
+(https://prosper.zendesk.com/hc/en-us/articles/210013213-How-does-Prosper-set-interest-rates-).
+
+How about different loan status in different scope of borrower rates?
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, rate_plot_status, dpi=40, out.width="800px", out.height="600px"}
+# plot distribution of BorrowerRate each year
+# and clasified by CompletedOrRisk 
+ggplot(aes(x = BorrowerRate), data = sub_loan) +
+  geom_histogram(aes(color = CompletedOrRisk), binwidth = 0.005) +
+  facet_wrap(~year) 
+
+```
+
+We can see that some high risk loans distributed evenly at lower interest rate 
+area before 2009, and after 2009 it has been slightly improved with more moving
+to the right sides. But this is not very significant.
+
+Another interesting thing is, the most spiked interest rate, which is 
+around 32%, is with evenly distributed of completed loans and high risk loans, 
+meaning that even if one loan is rated as highest risk, there still has the 
+chance that the loan can be completed.
+
+Highlights in this section:
+
+- The borrower interest rate has clearly patterns across different credit 
+rating and somewhat determined by Credit Grade and Prosper Rating.
+
+- Seems like the Prosper Rating has better ability to measure loan risk than 
+previous matrix, but not very significant.
+
+## 3.Credit Risk Matrices 
+
+In such a huge dataset contains so many variables of credit risk matrices,
+I will start from the most directly matrix for investors which they can see 
+directly in the platform.
+
+Before 2009, the major credit risk matrix displayed for investors was 
+`Credit Grades`, which was based on the borrower・s credit score from 
+an independent credit reporting agency. But the loan performance on Prosper 
+were not very well at that time. After temporarily shut down asked by SEC and restructuring, Prosper launched new credit risk matrix displayed since 
+July 2009 --- `Prosper Rating`, which regarded as stricter credit
+guidelines for borrowers. 
+
+In the previous section: *Borrower Rate*, I found that it Seems like the 
+Prosper Rating has better ability to measure loan risk than previous matrix 
+of credit score from agency.
+
+Here I will explore both of `Credit Grade` and `Prosper Rating` to see if 
+they have differences.
+
+### Credit Grade and Prosper Rating
+
+According to Prosper's [Form S-1](https://www.sec.gov/Archives/edgar/data/1416265/000110465907078072/0001104659-07-078072-index.htm) filed in October 2007, the **Credit Grade** was based on 
+Experian Scorex PLUS, which was provided by Experian--- one of the 
+leading credit reporting agencies in the United States. It ranges from 
+a high of 900 to a low of 300, which a higher number is indicative of greater
+likelihood that the borrower will pay his or her credit obligations. 
+Prosper・s seven letter credit grades correspond to seven Experian 
+Scorex PLUS scores tiers, with more favorable credit grades assigned
+to the higher scores. (NC means 'No Score') 
+
+|Credit Grade|AA|A|B|C|D|E|HR|
+|--------------------|--------|--------|--------|--------|--------|--------|--------|
+|**Scorex PLUS Credit Score**|760 and up|720-759|680-719|640-679|600-639|560-599|520-559|
+|*Source: Prosper Form S-1*||||||||
+
+The other matrix available after 2009, `Prosper Rating`, launched by 
+Prosper's own system in 2009, were measured in AA, A, B, C, D, E, HR 
+from low risk to high as well. Following are the tables of the both rating.
+(The first is `CreditGrade`, the second is `ProsperRating`)
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, CreditGrade_and_ProsperScore, dpi=40, out.width="800px", out.height="800px"}
+# list CreditGrade frequency table
+table(loan$CreditGrade)
+# list ProsperRating frequency table
+table(loan$ProsperRating..Alpha.)
+# make CreditGrade as factor and in an order of good level to bad level
+loan$CreditGrade <- factor(loan$CreditGrade, 
+                           levels =c("AA", "A", "B", "C", "D", "E", "HR", "NC"), 
+                           order = T)
+# make ProsperRating as factor and in an order of good level to bad level
+loan$ProsperRating..Alpha. <- 
+  factor(loan$ProsperRating..Alpha., 
+         levels =c("AA", "A", "B", "C", "D", "E", "HR"), 
+         order = T)
+# plot distribution of CreditGrade
+p1 <- ggplot(aes(x= CreditGrade), 
+             data = subset(loan, CreditGrade != "")) +
+  geom_bar() +
+  geom_text(stat='count', aes(label=..count..), vjust=1.2, size = 4) +
+  ggtitle("Credit Grade before 2009(low to high risk from left to right)")
+# plot distribution of ProsperRating
+p2 <- ggplot(aes(x= ProsperRating..Alpha.), 
+             data = subset(loan, ProsperRating..Alpha. != "")) +
+  geom_bar() +
+  geom_text(stat='count', aes(label=..count..), vjust=1.2, size = 4) +
+  ggtitle("Prosper Rating after 2009(low to high risk from left to right)")
+
+grid.arrange(p1, p2 ,ncol = 1, heights = c(2, 2))
+
+```
+
+From the graphs above, the borrower credit graded before 2009 were primarily
+at C and D which were medium-to-high credit risk level but with fat tails 
+on two sides. And after 2009, we can see the distribution presents a similar 
+bell-shaped center at c but with much thinner tails on two sides. Seems like
+Prosper conduct more strict credit auditing causing Prosper Rating on
+the ：AA； category as well as the ：HR； decrease.
+
+On average, borrowers credit level on Prosper was distributed somewhat like 
+bell shape with most of borrower in medium risk level.
+
+How about the ability of loan risk measuring before and after 2009?
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, creditscore_bystatus, dpi=40, out.width="800px", out.height="1000px",fig.height=7}
+# make CreditGrade as factor and in an order of good level to bad level
+# in the sub_loan subset
+sub_loan$CreditGrade <- 
+  factor(sub_loan$CreditGrade, 
+         levels =c("AA", "A", "B", "C", "D", "E", "HR", "NC"), 
+         order = T)
+# make ProsperRating as factor and in an order of good level to bad level
+# in the sub_loan subset
+sub_loan$ProsperRating..Alpha. <- 
+  factor(sub_loan$ProsperRating..Alpha., 
+         levels =c("AA", "A", "B", "C", "D", "E", "HR"), 
+         order = T)
+# plot distribution of CreditGrade and group by CompletedOrRisk
+p3 <- ggplot(aes(x= CreditGrade ,y = ..count../sum(..count..)), 
+             data = subset(sub_loan, CreditGrade != "")) +
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")),
+            vjust=-.2,
+            size = 3.5) +
+  ggtitle("Credit Grade before 2009(low to high risk)") +
+  facet_wrap(~CompletedOrRisk, ncol = 2)
+
+# plot distribution of ProsperRating and group by CompletedOrRisk
+p4 <- ggplot(aes(x= ProsperRating..Alpha.,
+                 y = ..count../sum(..count..)), 
+             data = subset(sub_loan, ProsperRating..Alpha. != "" )) +
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-.2, size = 3) +
+  ggtitle("Prosper Rating after 2009(low to high risk)") +
+  facet_wrap(~CompletedOrRisk, ncol = 2)
+
+grid.arrange(p3, p4 ,ncol = 1, heights = c(2, 2))
+```
+
+- **Completed loans** before 2009 primarily distributed at C or better with 
+around 41% of all loans, while after 2009 it distributed more evenly with  
+rating C or better decreased to 38%, mostly decreased in AA and increased in D.
+
+- **High risk loans** totally **decreased compared to loans before 2009**,
+as we have shown in previous section, **while loans rated in D
+and HR still increased**. Besides, loans rated in C has decreased most from 7.04% 
+before 2009 to 4.7% after 2009.
+
+According above, **I think the ability of Prosper Rating has improved on 
+detecting the high risk loans.** Or we can say it seems like Prosper conduct 
+more strict credit auditing on Prosper Rating to reduce good loans to a more
+medium risk levels.
+
+**It leads me wonder what's the factor improved in the Prosper Rating 
+compared to the previous credit grade? If I can find some patterns, 
+maybe it's the key factor that associated with the different risk level of loans.**
+
+According to this [page](https://www.prosper.com/plp/general-estimated_loss_rates/), **Prosper Rating** is determined by **Estimated Loss Rates**, and this 
+Estimated Loss Rates is determined by two scores: 1) a custom **Prosper Score** 
+and 2) **Credit score** from a consumer reporting agency (like Experian). 
+So I will investigate more in Prosper Score and Credit score to see how they make Prosper Rating more accurate than Credit Grade.
+
+### Prosper Score
+
+According to Prosper website, *Prosper Score was built using historical 
+Prosper data to assess the risk of Prosper borrower listings.* It ranges 
+from 1 to 11, with 11 being the lowest risk, to 1 being the highest risk. 
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, ProsperScore, dpi=36, out.width="600px", out.height="600px"}
+# make a ProsperScore frequency table
+summary(loan$ProsperScore)
+# make ProsperScore as factor
+loan$ProsperScore <- factor(loan$ProsperScore)
+# make ProsperScore as factor in the subset of sub_loan
+sub_loan$ProsperScore <- factor(sub_loan$ProsperScore)
+# plot the Prosper Score bar chart
+ggplot(aes(x= ProsperScore), data = subset(loan, ProsperScore != "")) +
+  geom_bar() +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.5, size = 4)
+```
+
+Graph above shows Prosper Score has a bell-shaped distribution spiking on 
+Score with 4,6,7, and fewer counts with scores in both low and high risk.
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, status_ProsperScore, dpi=40, out.width="700px", out.height="700px"}
+# plot the Prosper Score bar chart and group by CompletedOrRisk
+ggplot(aes(x= ProsperScore), data = subset(sub_loan, ProsperScore != "" )) +
+  geom_bar() +
+  geom_text(stat='count', aes(label=..count..), vjust=-0.5, size = 4) +
+  facet_wrap(~CompletedOrRisk, ncol = 3)
+```
+
+Group Prosper Score with each loan status, we can see the Prosper score 
+distributed a left skewed shape in completed loan, which means completed loans 
+primarily locate in good rating. However, Prosper score distributed a bell-shaped 
+in high risk loan. **Compared to `Prosper Rating`, seems like Prosper Score 
+presents a less ability to detect the high risk loans**.
+
+Since Prosper Score is just one of component in Prosper Rating. To see the 
+difference, I compared the Prosper Score graph to the previous `Prosper Rating` 
+graph:
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, compare_ProsperScore, dpi=40, out.width="700px", out.height="700px", fig.height=7}
+# plot distribution of ProsperScore in percentage
+g1 <- ggplot(aes(x= ProsperScore, y = ..count../sum(..count..)), 
+             data = subset(sub_loan, ProsperScore != "" )) +
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-0.2,
+            size = 3) +
+  ggtitle("Prosper Score after 2009(high to low risk)")
+
+# make ProsperRating column in sub_loan as factor 
+# and reverse the order from previous's to make plot readiable
+sub_loan$ProsperRating..Alpha. <- factor(sub_loan$ProsperRating..Alpha., levels=rev(levels(sub_loan$ProsperRating..Alpha.) ))
+# plot distribution of ProsperRating in percentage
+g2 <- ggplot(aes(x= ProsperRating..Alpha., y = ..count../sum(..count..)), 
+             data = subset(sub_loan, ProsperRating..Alpha. != "")) +
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")),
+            vjust=-.2, 
+            size = 3) +
+  ggtitle("Prosper Rating after 2009(high to low risk)")
+
+grid.arrange(g1, g2 ,ncol = 1, heights = c(2, 2))
+```
+
+We can see that Prosper Score distributed a left-skewed shape, while Prosper 
+Rating distributed more evenly. It seems like there are some more strict measuring standard that be added in the less-strict of `Prosper Score` and make
+`Prosper Rating` to be more strict .
+
+Group with each status of loans:
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, status_compare_ProsperScore, dpi=50, out.width="700px", out.height="700px", fig.height=7}
+# plot distribution of ProsperScore in percentage group by CompletedOrRisk
+g3 <- ggplot(aes(x= ProsperScore, y = ..count../sum(..count..)),
+             data = subset(sub_loan, ProsperScore != "" )) +
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-0.2, 
+            size = 3) +
+  ggtitle("Prosper Score after 2009(high to low risk)") +
+  facet_wrap(~CompletedOrRisk, ncol = 3)
+# plot distribution of ProsperRating in percentage group by CompletedOrRisk
+g4 <- ggplot(aes(x= ProsperRating..Alpha., y = ..count../sum(..count..)), 
+             data = subset(sub_loan, ProsperRating..Alpha. != "")) +
+  geom_bar() +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-.2, 
+            size = 3) +
+  ggtitle("Prosper Rating after 2009(high to low risk)") +
+  facet_wrap(~CompletedOrRisk, ncol = 3)
+
+grid.arrange(g3, g4 ,ncol = 1, heights = c(2, 2))
+```
+
+- Observe that the both distributions of **completed loan**, it seems like 
+Prosper using more stricter of adjusting way causing some loans rated in 
+6-10(medium to good loans) of Prosper Score to move to "D" to "HR" of Prosper Rating(more bad rate).
+
+- And in **high risk** loan we can see after adjustment, the Prosper Rating 
+presents more good ability in detecting the high risk loans with bell-shaped to left-skewed shape.
+
+The other component of Prosper Rating is **credit score from a reporting agency**. 
+In this data set, I think the variables related to this kind of scores were `CreditScoreRangeLower` and `CreditScoreRangeUpper`. I create a new variable `CreditScoreAverage` by averaging both of the two variables.
+
+### Credit Score Average
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, CreditScoreRangeLower, dpi=40, out.width="700px", out.height="700px", fig.height=7}
+# create the new variable of CreditScoreAverage by
+# average the CreditScoreRangeLower and CreditScoreRangeUpper
+loan$CreditScoreAverage <- 
+  (loan$CreditScoreRangeLower + loan$CreditScoreRangeUpper) / 2
+sub_loan$CreditScoreAverage <- (sub_loan$CreditScoreRangeLower + sub_loan$CreditScoreRangeUpper) / 2
+
+```
+
+Let's see the distribution of `CreditScoreAverage`. Basically, before 2009 
+Prosper does not allow individuals with an Experian Scorex PLUS credit score 
+below 520 to post listings on the Platform. And after 2009, Prosper made the 
+Credit Score have the minimum threshold up to 640, but in some cases they 
+allowed scores minimum value to 600 if borrower previously completed a Prosper 
+loan. So I divided the graph into two period and limit the min value of the
+score on x-axis to 510 and 630 to exclude the outliers of special cases.
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, CreditScoreRangePlot, dpi=40, out.width="700px", out.height="600px", fig.height=7}
+# make the CreditScoreAverage frequency table
+summary(loan$CreditScoreAverage)
+# plot the distribution of CreditScoreAverage Before 2009
+g5 <- ggplot(aes(x= CreditScoreAverage), 
+             data = subset(loan, CreditScoreAverage != ""& is.na(ProsperRating..Alpha.))) +
+  geom_histogram(binwidth = 10) +
+  coord_cartesian(xlim = c(510, 900)) +
+  scale_x_continuous(breaks = seq(510, 900, 20))+
+  ggtitle("Average Credit Score Before 2009(low to high risk)") 
+# plot the distribution of CreditScoreAverage after 2009
+g6 <- ggplot(aes(x= CreditScoreAverage),
+             data = subset(loan, CreditScoreAverage != ""& !is.na(ProsperRating..Alpha.))) +
+  geom_histogram(binwidth = 10) +
+  coord_cartesian(xlim = c(630, 900))+
+  scale_x_continuous(breaks = seq(630, 900, 20))+
+  ggtitle("Average Credit Score after 2009(low to high risk)") 
+
+grid.arrange(g5, g6 ,ncol = 1, heights = c(2, 2))
+
+```
+
+We can see the `CreditScoreAverage` distributed as right-skewed **after 2009** 
+with most of counts in 610 to 670, and a roughly bell shape **before 2009** 
+with most of counts in 670 to 710. We can see that the overall Average Credit Score after 2009 was apparently rated higher compared to loans before 2009. 
+
+Subseting the Average Credit Score with loan status in `Completed` and `HighRisk`:
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, status_CreditScoreRangePlot, dpi=50, out.width="850px", out.height="800px"}
+# make the CreditScoreAverage histogram group by CompletedOrRisk
+g7 <- ggplot(aes(x= CreditScoreAverage, y = ..count../sum(..count..)), 
+             data = subset(sub_loan, CreditScoreAverage != "" & is.na(ProsperRating..Alpha.))) +
+  geom_histogram(binwidth = 10) +
+  coord_cartesian(xlim = c(510, 900))+
+  scale_x_continuous(breaks = seq(510, 900, 40)) +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-0.2, 
+            size = 3)+
+   facet_wrap(~CompletedOrRisk, ncol = 1) +
+  ggtitle("Average Credit Score before 2009\n(high to low risk)")
+# make the CreditScoreAverage histogram group by CompletedOrRisk
+g8 <- ggplot(aes(x= CreditScoreAverage, y = ..count../sum(..count..)), 
+             data = subset(sub_loan, CreditScoreAverage != "" & !is.na(ProsperRating..Alpha.))) +
+  geom_histogram(binwidth = 10) +
+  coord_cartesian(xlim = c(630, 900))+
+  scale_x_continuous(breaks = seq(630, 900, 40)) +
+  geom_text(stat='count',
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")),
+            vjust=-0.2, 
+            size = 3)+
+   facet_wrap(~CompletedOrRisk, ncol = 1) +
+  ggtitle("Average Credit Score after 2009\n(high to low risk)")
+
+grid.arrange(g7, g8 ,ncol = 2)
+
+```
+
+From the graphs above:
+
+- We can see that the whole distribution `CreditScoreAverage` **moves to right**
+after 2009 because the required Credit Score has the minimum threshold from 520 
+to 640. That's why it makes the Prosper Rating more strict than Prosper Score.
+
+- Compare to the distribution of `Completed` and `HighRisk` loans, we can see 
+that they have **nearly similar distributions** with right-skewed shape in both
+two periods.
+
+It turns out: If Prosper only uses Credit Score for auditing, under the condition
+of more strict assessing after 2009(higher threshold), **the credit score of overall borrowers' loans at that time will primarily located in high-risk tiers,
+even the loans would have the high probability to complete.** However, since 
+Prosper combined **Prosper Score** as well, it makes Prosper Rating present 
+much better measuring ability and appear a much better discriminating between
+completed and high risk loans.
+
+#### *Investigation so far...*
+
+Let's make a brief summary. After 2009, Prosper apply the **Prosper Score** to 
+make credit measuring have more discrimination, under the condition of more strict 
+assessing standard on bureau score threshold after 2009.
+
+So what's the major elements of **Prosper Score**? I flipped through Prosper 
+annual report from 2010 and 2013, I found some information about Prosper Score:
+
+> Prosper Score is built to estimate the likelihood that a loan will go 61+ days
+past due. Unlike credit score obtained from a credit reporting agency is based on
+a much broader population, Prosper Score is based on a more precise picture from a smaller lending platform subset.
+
+Interest. I infer that if Prosper just measure the borrower credit score by 
+traditional bureau agency, in fact it is just a similar measuring way like 
+lending from a bank or other officially lending institution. **Prosper Score** 
+consider the borrower behaviors that is unique among platform population. 
+Maybe such a custom credit score is more suitable for the lending platform market, because it is specifically measured by the Prosper borrower and applicant 
+population. Because we know the lending platform offering borrower a additional
+platform when he/she can't borrow from a bank, which measure credit score in 
+more strict way. But such the lending platform spreads the risk across many 
+investors. The measuring way may be different.
+
+Hence, I search what's the major elements of Prosper Score. I found some different sources that Prosper Score was composed by different set of elements over time.
+Like the [website](https://www.prosper.com/plp/general-prosper_score/) or this [one](https://www.doughroller.net/p2p-lending/prosper-vs-lending-club-smackdown-who-has-the-best-interest-rates/). I am not going explore all the related elements in 
+order to avoid making the report too long. Instead, I will choose some variable
+I think important which also coved by these variable lists from these sources.
+
+## 4.Other Important Credit Risk Matrices
+
+### Inquiries Last 6 Months
+
+First start with `InquiriesLast6Months`, It measures the number of credits 
+inquiries of borrowers in the past six months at the time the credit profile 
+was pulled.
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, InquiriesLast6Months_and_TotalInquiries, dpi=40, out.width="600px", out.height="600px"}
+# make InquiriesLast6Months frequency table
+summary(loan$InquiriesLast6Months)
+# plot InquiriesLast6Months histogram
+ggplot(aes(x= InquiriesLast6Months), data = loan) +
+  geom_histogram(color = "black", binwidth = 1) +
+  scale_x_continuous(limits = c(-1,15), breaks = seq(-1,15,1))
+
+```
+
+The distribution present right-skewed, most of the inquiries in past 6 months 
+occur mostly occur ant 0 time with gradually fewer counts when past 6 months 
+inquiries increase.
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, by_status_log_InquiriesLast6Months_and_TotalInquiries, dpi=36, out.width="600px", out.height="700px", fig.height=7}
+# plot InquiriesLast6Months histogram group by CompletedOrRisk
+ggplot(aes(x= InquiriesLast6Months), data = sub_loan) +
+  geom_histogram(color = "black") +
+  facet_wrap(~CompletedOrRisk, ncol = 1)
+```
+
+Subset `InquiriesLast6Months` into different loan status, it shows both have 
+right-skew distribution, but the shape in high risk loan is flatter.
+
+### Bank Card Utilization
+
+Next, let's check out `BankcardUtilization`. It measures borrower's total amount
+of credit limit that's being used. The lower the ratio is, the more financial 
+liquidity of one's has.
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, BankcardUtilization, dpi=36, out.width="600px", out.height="600px"}
+# make BankcardUtilization frequency table
+summary(loan$BankcardUtilization)
+# plot BankcardUtilization histogram
+ggplot(aes(x = BankcardUtilization), data = loan) +
+  geom_histogram(color = "black", binwidth = 0.1) +
+  scale_x_continuous(limits = c(-0.1,1.1), breaks = seq(-0.1,1.1,0.1))
+```
+
+The maximum value of the ratio is reasonably at 1, it seems like there are some unreasonable outliers which ate over one, so I limit the x-axis to one on the graph.
+
+From the graph above, most of the borrower have the ratio around 0.6 to 0.9, 
+and with median and mean in 0.6, 0.56 respectively. It seems like the borrowers 
+on Prosper are medium or heavy credit card user. 
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, by_status_BankcardUtilization, dpi=36, out.width="600px", out.height="700px", fig.height=7}
+# plot BankcardUtilization histogram group by CompletedOrRisk
+ggplot(aes(x = BankcardUtilization), data = sub_loan) +
+  geom_histogram(color = "black", binwidth = 0.1) +
+  scale_x_continuous(limits = c(-0.1,1.1), breaks = seq(-0.1,1.1,0.1)) +
+  facet_wrap(~CompletedOrRisk, ncol = 1)
+```
+
+We can see the distribution of `BankcardUtilization` in completed loan is 
+flatter, while in high risk loan it primarily concentrated in the high ratio 
+area with increasing shape across the `BankcardUtilization`.
+
+### Delinquencies Last 7 Years
+
+Now, the last one is `DelinquenciesLast7Years`, which measures the number of delinquencies in the past 7 years at the time the credit profile was pulled.
+
+```{r echo = FALSE, message=FALSE, warning=FALSE, DelinquenciesLast7Years, dpi=36, out.width="600px", out.height="600px"}
+# make DelinquenciesLast7Years frequency table
+summary(loan$DelinquenciesLast7Years)
+# plot DelinquenciesLast7Years histogram
+ggplot(aes(x= DelinquenciesLast7Years), data = loan) +
+  geom_histogram(color = "black", binwidth = 1) +
+  scale_x_continuous(limits = c(-1,40), breaks = seq(-1,40,1)) +
+  scale_y_continuous(limits = c(0,80000))
+```
+
+We can see that at least 50% borrowers have no delinquency in the past 7 years.
+Borrower with delinquency were primarily at 1 to 3 times.
+
+### Debt To Income Ratio
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, DebtToIncomeRatio, dpi=36, out.width="600px", out.height="600px"}
+# make DebtToIncomeRatio frequency table
+summary(loan$DebtToIncomeRatio)
+# plot DebtToIncomeRatio histogram
+ggplot(aes(x = DebtToIncomeRatio), data = loan) +
+  geom_histogram(color = "black") +
+  scale_x_continuous(limits = c(0, 2))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, log_DebtToIncomeRatio, dpi=36, out.width="600px", out.height="600px"}
+# plot DebtToIncomeRatio histogram by Transforming with log10
+ggplot(aes(x = DebtToIncomeRatio), data = loan) +
+  geom_histogram(color = "black") +
+  scale_x_log10()
+```
+
+Transformed the long tail data to better understand the distribution with log10,
+it presents a bell-shaped distribution centered around 0.6 to 0.7. Seems like
+borrowers in the data set are medium to heavy credit card users.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, log2_DebtToIncomeRatio, dpi=36, out.width="600px", out.height="800px", fig.height=6}
+# plot DebtToIncomeRatio histogram by Transforming with log10
+# and group by CompletedOrRisk
+ggplot(aes(x = DebtToIncomeRatio), data = sub_loan) +
+  geom_histogram(color = "black") +
+  scale_x_log10() +
+  facet_wrap(~CompletedOrRisk, ncol = 1)
+```
+
+The graph above shows that the distribution in each loan status have no significant difference with bell-shapes except that distribution in high risk loan is more 
+flatter. 
+
+### Total Prosper Loans
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, TotalProsperLoans, dpi=36, out.width="700px", out.height="700px"}
+# make TotalProsperLoans frequency table
+summary(loan$TotalProsperLoans)
+table(loan$TotalProsperLoans)
+# plot TotalProsperLoans bar chart
+ggplot(aes(x = factor(TotalProsperLoans)), 
+       data = subset(loan, !is.na(TotalProsperLoans))) +
+  geom_bar(color = "black")
+
+```
+
+There are 91,852 loan lists with no previous Prosper Loans record which accounted
+about 80.6% of all loans. In other words, there are about 20% of loan lists that
+have the previous Prosper Loans records.  And in the loans with Prosper Loans 
+records, most of the number of records are one time.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, subset1_TotalProsperLoans, dpi=40, out.width="700px", out.height="600px", fig.height=5}
+# plot TotalProsperLoans bar chart in
+# subset with no TotalProsperLoans 
+g9 <- ggplot(aes(x = CompletedOrRisk, y = ..count../sum(..count..)), 
+             data = subset(sub_loan, is.na(TotalProsperLoans))) +
+  geom_bar(color = "black") + 
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")),
+            vjust=-0.2, size = 3)+
+  ggtitle("Loan Status without Previous Prosper Loan Record")
+# plot TotalProsperLoans bar chart in
+# subset with TotalProsperLoans 
+g10 <- ggplot(aes(x = CompletedOrRisk, y = ..count../sum(..count..)), 
+              data = subset(sub_loan, !is.na(TotalProsperLoans))) +
+  geom_bar(color = "black") +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")),
+            vjust=-0.2, size = 3)+
+  ggtitle("Loan Status with Previous Prosper Loan Record")
+
+grid.arrange(g9, g10 ,ncol = 2)
+
+```
+
+If we see "no previous Prosper Loan" and "has previous Prosper Loan" as two 
+groups, we can see in "has previous Prosper Loan" group, the completed loan has
+slightly higher percentage than "no previous Prosper Loan" group.
+
+Cool, I think that's why Prosper takes the previous Prosper Loan record into consideration.
+
+### ProsperPrincipalOutstanding
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, ProsperPrincipalOutstanding, dpi=40, out.width="700px", out.height="700px"}
+# make ProsperPrincipalOutstanding frequency table
+summary(loan$ProsperPrincipalOutstanding)
+# plot ProsperPrincipalOutstanding histogram
+ggplot(aes(x = ProsperPrincipalOutstanding), data = loan) +
+  geom_histogram(color = "black")
+# compute the number of NA values of ProsperPrincipalOutstanding
+dim(subset(loan,!is.na(TotalProsperLoans) & ProsperPrincipalOutstanding > 0))
+
+```
+
+There are 91,852 of NA values, corresponding the number of NA in 
+`Total Prosper Loans`. In the loans with Prosper Loan records, above table shows
+there are still about 16,142 loans with outstanding Prosper Principal which are not completed.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, ProsperPrincipalOutstanding1, dpi=40, out.width="700px", out.height="900px", fig.height=9}
+# plot ProsperPrincipalOutstanding bar chart group by CompletedOrRisk
+# subset with Loans having outstanding Prosper Principal
+g11 <- ggplot(aes(x = CompletedOrRisk, y = ..count../sum(..count..)), 
+              data = subset(sub_loan, ProsperPrincipalOutstanding > 0 )) +
+  geom_bar(color = "black") +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-0.2, size = 3)+
+  ggtitle("Loan Status with outstanding Prosper Principal")
+# plot ProsperPrincipalOutstanding bar chart group by CompletedOrRisk
+# subset without Loans having outstanding Prosper Principal  
+g12 <- ggplot(aes(x = CompletedOrRisk, y = ..count../sum(..count..)),
+              data = subset(sub_loan, ProsperPrincipalOutstanding == 0 )) +
+  geom_bar(color = "black") +
+  geom_text(stat='count', 
+            aes(label= paste(round(..count../sum(..count..)*100, 2),"%")), 
+            vjust=-0.2, size = 3)+
+  ggtitle("Loan Status without outstanding Prosper Principal")
+
+grid.arrange(g11, g12, g9)
+```
+
+Putting all things together, we can see that borrowers has previous Prosper
+Loan records but without outstanding Prosper Principal are having the lowest 
+proportion of high risk loans around 30.32%.
+
+The interesting things is, borrowers has previous Prosper Loan record as well as outstanding Prosper Principle are having lower proportion of high risk loans than borrowers with no previous Prosper Loan Record.
+
+### ScorexChangeAtTimeOfListing
+
+This matrix measures borrower's credit score changes at the time the credit 
+profile was pulled. This will be the change relative to the borrower's last
+Prosper loan.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, ScorexChangeAtTimeOfListing, dpi=36, out.width="600px", out.height="600px"}
+# make ScorexChangeAtTimeOfListing frequency table
+summary(loan$ScorexChangeAtTimeOfListing)
+# plot ScorexChangeAtTimeOfListing histogram
+ggplot(aes(x = ScorexChangeAtTimeOfListing), data = loan) +
+  geom_histogram(color = "black")
+
+```
+
+We can see that the distributions appear a bell shape distribution, with mean 
+around -3 and range around 500.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, status_ScorexChangeAtTimeOfListing, dpi=36, out.width="600px", out.height="600px"}
+# plot ScorexChangeAtTimeOfListing histogram group by CompletedOrRisk
+ggplot(aes(x = ScorexChangeAtTimeOfListing), data = sub_loan) +
+  geom_histogram(color = "black") +
+  facet_wrap(~CompletedOrRisk, ncol = 1)
+
+```
+
+The graph above shows that the distribution in each loan status have no significant difference with bell-shapes.
+
+## 5.Borrower Data
+
+Here I also choose the variable which I think important corresponding to the
+element of Prosper Score.
+
+### Length of Employment
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, length_of_employment, dpi=40, out.width="600px", out.height="600px"}
+# plot EmploymentStatusDuration histogram in year
+ggplot(aes(x= EmploymentStatusDuration/12), data = loan) +
+  geom_histogram(color = "black", binwidth = 1) +
+  scale_x_continuous(limits = c(0, 60), breaks = seq(0, 60, 2))+
+  xlab("Employment Duration in Years")
+# make EmploymentStatusDuration frequency table
+summary(loan$EmploymentStatusDuration/12)
+```
+
+The duration of borrower's employment is primarily at 0-10 years, the duration 
+mean is about 8 years and the median is about 5.6 years.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, by_year_length_of_employment, dpi=40, out.width="800px", out.height="800px", fig.width=11}
+
+# plot EmploymentStatusDuration histogram group by CompletedOrRisk
+ggplot(aes(x= EmploymentStatusDuration/12), data = sub_loan) +
+  geom_histogram(color = "black", binwidth = 1) +
+  scale_x_continuous(limits = c(0, 60), breaks = seq(0, 60, 2))+
+  xlab("Employment Duration in Years") + 
+  facet_wrap(~CompletedOrRisk)
+```
+
+The distribution in each loan status has the similar shape.
+
+### Income Range
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, IncomeRange, dpi=36, out.width="600px", out.height="600px"}
+# make IncomeRange as factor
+loan$IncomeRange <- factor(loan$IncomeRange, 
+                           levels = c("$0",  "$1-24,999","$25,000-49,999", "$50,000-74,999", "$75,000-99,999", "$100,000+", "Not employed", "Not displayed"), 
+                           ordered = T)
+# plot bar chart of IncomeRange
+ggplot(aes(x = IncomeRange), data = loan) +
+  geom_bar(color = "black") +
+  geom_text(stat='count', aes(label=..count..), hjust= -0.1)+
+  theme_pander() +
+  coord_flip()
+```
+
+The borrowers' income range were between $25,000 to $75,000 . Besides, the number
+of the higher income range (with 75,000+) is even more than the lower income range borrower (bellow 25,000). It shows that people use Prosper platform are primary 
+middle class or some rich.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, bystatus_IncomeRange, dpi=40, out.width="800px", out.height="800px"}
+# make IncomeRange as factor in sub_loan
+sub_loan$IncomeRange <- factor(sub_loan$IncomeRange, 
+                               levels = c("$0",  "$1-24,999","$25,000-49,999", "$50,000-74,999", "$75,000-99,999", "$100,000+", "Not employed", "Not displayed"), 
+                               ordered = T)
+# plot bar chart of IncomeRange group by CompletedOrRisk
+ggplot(aes(x = IncomeRange), data = sub_loan) +
+  geom_bar(color =  "black") +
+  geom_text(stat='count', aes(label=..count..), hjust= -0.1)+
+  theme_pander() +
+  coord_flip() +
+  facet_wrap(~CompletedOrRisk)
+
+```
+
+We can see the distribution in bad loan also has the similar patterns with 
+completed loan. 
+
+### Stated Monthly Income
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, StatedMonthlyIncome, dpi=36, out.width="600px", out.height="600px"}
+# make StatedMonthlyIncome frequency table
+summary(loan$StatedMonthlyIncome)
+# plot StatedMonthlyIncome histogram
+ggplot(aes(x= StatedMonthlyIncome), data = loan) +
+  geom_histogram(color = "black")+ 
+  scale_x_continuous(limits = c(0, 20000))
+
+```
+
+Transformed the long tail data to better understand the distribution of stated 
+monthly income.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, log_StatedMonthlyIncome, dpi=36, out.width="600px", out.height="600px"}
+# plot StatedMonthlyIncome histogram and Transformed in log10
+ggplot(aes(x= StatedMonthlyIncome), data = loan) +
+  geom_histogram(color = "black") +
+  scale_x_log10( breaks=c(1,10,100,1000,5000,10000),
+                 labels=c(1,10,100,1000,5000,10000)) 
+ 
+```
+
+Above graph shows that the distribution of stated monthly income appears a normal
+shape centered around 7,500.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, status_log_StatedMonthlyIncome, dpi=36, out.width="700px", out.height="700px",fig.width=11}
+# plot StatedMonthlyIncome histogram and Transformed in log10
+# and group by CompletedOrRisk
+ggplot(aes(x= StatedMonthlyIncome), 
+       data = sub_loan) +
+  geom_histogram(color = "black") +
+  scale_x_log10(
+    breaks=c(1,10,100,1000,5000,10000),
+    labels=c(1,10,100,1000,5000,10000)) +
+  facet_wrap(~CompletedOrRisk)
+# make StatedMonthlyIncome frequency table group by CompletedOrRisk
+by(sub_loan$StatedMonthlyIncome, sub_loan$CompletedOrRisk, summary)
+```
+
+These distributions appear similar, while their mean stated incomes have 
+difference: the mean of borrower income with completed loan is 5,330, 
+and the mean of borrower income with high risk loan is 4,550.
+
+
+# Univariate Analysis
+
+### What is the structure of your dataset?
+
+There are 113,979 loan lists in the data set with 81 features from 2005 Nov 
+to 2014 Mar. These 81 variables can be classified into four categories: loan status, borrower data, loan data, credit risk matrices. 
+
+### What are the main features of interest in your dataset?
+
+For my questions of interest, the main features are as follows:
+
+**Loan Status**: A loan is `completed` or `high risk`. 
+
+**Credit Risk Matrix**: `Credit Grade`, `Prosper Rating`, `Prosper Score`,
+`Credit Score Range Lower` and `Credit Score Range Upper`. 
+
+The main credit rating applied on Prosper before July 2009 was `Credit Grade`,
+which was based on the borrower・s credit score from an independent credit
+reporting agency. 
+
+After July 2009 Prosper used `Prosper Rating`, which had two major components: 
+`Prosper Score` and `Credit score` from a consumer reporting agency.
+
+I am interest in What risk factors are connected to high risk loan or completed 
+loan? And how Prosper improved their credit risk matrix? Features in **Credit Risk Matrix** listed above may the potential features associated with **Loan Status**.
+
+### What other features in the dataset do you think will help support your \
+investigation into your feature(s) of interest?
+
+Some related components about **Prosper Rating** and **Prosper Score** such as: `Inquiries Last 6 Months`, `Bank Card Utilization`, `Delinquencies Last 7 Years`,
+`Debt To IncomeRatio`, `ProsperPrincipalOutstanding`, `Total Prosper Loans`, `ScorexChangeAtTimeOfListing`.
+
+The others are properties about borrower such as `Employment Status`, `Length of Employment`, and `Stated Monthly Income`.
+
+### Did you create any new variables from existing variables in the dataset?
+
+- `CompletedOrRisk`: I created `CompletedOrRisk` to simplify the original 
+`LoanStatus` variable which contains up to 7 levels. The `CompletedOrRisk` contains Completed and HighRisk.
+
+- `Credit Score Average`: The variable is derived from `Credit Score Range Lower`
+and `Credit Score Range Upper`, which is equal to the average of 
+`Credit Score Range Lower` and `Credit Score Range Upper`. The variable is
+measured as a component of Prosper Rating.
+
+### Of the features you investigated, were there any unusual distributions? \
+Did you perform any operations on the data to tidy, adjust, or change the form \
+of the data? If so, why did you do this?
+
+- I noticed both of completed loan and high risk loan have unusual peak of Borrower Interest Rate around 32%. So I classified the Borrower Interest Rate across 
+each year and I found the peak around 32% primary occurred in 2012 and they were 
+primary rated as "HR" in Prosper Rating.
+
+- I log-transformed the right skewed `Debt To IncomeRatio` and 
+`Stated Monthly Income` distributions. The transformed distribution for both are appearing bell-shape and center around 0.6 to 0.7 and 7,500 respectively.
+
+# Bivariate Plots Section
+
+In the previous section, we found **Prosper Rating** seems conduct a better 
+credit risk measuring way for Prosepr lending platform. Prosper Rating is 
+composed of **Prosper Score** and **Credit Bureau Score**, and the 
+**Prosper Score** plays a key role to make the lending platform rating have more discrimination compared to Credit Bureau Score itself.
+
+In this section, I will investigate the relationship between **Prosper Score** 
+with other features to see what's the factor are emphasized in **Prosper Score**.
+
+## Prosper Score, Credit Score, Prosper Rating and Risk Loan
+
+First, let's investigate the relationship between **Credit Grade**, 
+**Prosper Rating** and **each status of loan**. I want to check again if 
+Prosper Rating and Credit Score can detect both of the bad and good loans.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, rating_status, dpi=42, out.width="700px", out.height="800px",fig.height=8}
+# make CreditGrade as factor and reverse the order 
+# to make the following plot more readable
+sub_loan$CreditGrade <- factor(sub_loan$CreditGrade, levels=rev(levels(sub_loan$CreditGrade) ))
+# plot the percentage bar chart of CompletedOrRisk 
+# in each CreditGrade
+g13 <- ggplot(aes(x = CreditGrade, 
+                  fill = CompletedOrRisk), 
+              data = subset(sub_loan, !is.na(CreditGrade))) + 
+  geom_bar(position = "fill") +
+  ggtitle("Credit Grade V.S. Loan Status")
+# plot the percentage bar chart of CompletedOrRisk 
+# in each ProsperRating
+g14 <- ggplot(aes(x = ProsperRating..Alpha.,
+                  fill = CompletedOrRisk),
+              data = subset(sub_loan, !is.na(ProsperRating..Alpha.))) + 
+  geom_bar(position = "fill") +
+  ggtitle("Prosper Rating V.S. Loan Status")
+# plot the percentage bar chart of CompletedOrRisk 
+# in each CreditScoreAverage
+gg <-ggplot(aes(x=CreditScoreAverage, 
+                fill = CompletedOrRisk), 
+            data = subset(sub_loan,
+                          !is.na(CreditScoreAverage) &CreditScoreAverage >500)) + 
+  geom_bar(position = "fill") +
+  ggtitle("Credit Score Average V.S. Loan Status")
+
+grid.arrange(g13, g14, gg)
+
+```
+
+We can see the percentage of high risk loan appears an inverse relationship with both of Prosper Rating and Credit Grade. The lower percentage of high risk loan, the better the rating is. **Besides, we can see that the whole high risk loan actually decrease after Prosper Rating was launched.**
+
+Let's dive into components of `Prosper Rating`. First, look at
+`CreditScoreAverage` and `ProsperRating`.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, rating__credit, dpi=40, out.width="700px", out.height="700px"}
+# plot the scatter plot between `CreditScoreAverage` and `ProsperRating`
+ggplot(aes(x=ProsperRating..Alpha., y = CreditScoreAverage),
+       data = subset(sub_loan, !is.na(CreditScoreAverage)& !is.na(ProsperRating..Alpha.))) + 
+  geom_point(alpha = 1/20, position = 'jitter') +
+  geom_line(stat = 'summary', fun.y = mean , group = 1)
+
+```
+
+Although `ProsperRating` is category variable, I calculate the mean of `CreditScoreAverage` across each Prosper Rating and then drew a line to see more
+clearer relationship. We can see the distribution appears a concave-up incremental curve. And If we just look at the jittered scatter plot, the relationship between `CreditScoreAverage` and `ProsperRating` does not very clear, the variance of `CreditScoreAverage` in each Prosper Rating is kind of large.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, rating_score, dpi=40, out.width="700px", out.height="700px"}
+# plot the scatter plot between `ProsperScore` and `ProsperRating`
+ggplot(aes(x=ProsperRating..Alpha., y = as.numeric(ProsperScore)), 
+       data = subset(sub_loan, !is.na(ProsperScore)& 
+                       !is.na(ProsperRating..Alpha.))) + 
+  geom_point(alpha = 1/20, position = 'jitter')+
+  geom_line(stat = 'summary', fun.y = mean , group = 1)
+
+```
+
+Investigate `ProsperRating` and `ProsperScore` above, the distribution appears a slightly positive shape, and the variance of `Prosper Score` in each Prosper
+Rating is more concentrated.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, credit_score, dpi=40, out.width="700px", out.height="700px"}
+# plot the scatter plot between `ProsperScore` and `CreditScoreAverage`
+ggplot(aes(x=ProsperScore, y = CreditScoreAverage), 
+       data = subset(sub_loan, !is.na(ProsperScore)&
+                       !is.na(CreditScoreAverage))) + 
+  geom_point(alpha = 1/20, position = 'jitter')+
+  geom_line(stat = 'summary', fun.y = mean , group = 1)
+```
+
+Comparing `ProsperScore` to ` Credit Score Average`, we can see the distribution
+appears a concave-up incremental curve as well, while the variance of `CreditScoreAverage` in each Prosper Score is kind of large.
+
+Putting all three together, we can see `Credit Score Average` variated widely 
+across each `Prosper Ranting` and `Prosper Score`, although `Credit Score Average`
+has incremental threshold as `Prosper Score` increase overall. But I think
+**Prosper put more weights of Prosper Score than Credit Score Average on their 
+own Prosper Rating model**. 
+
+Before any deeply exploration of relationship between two variables, I want to
+start with a correlation table between the variables from previous sections with `corrplot` to get a quick overview.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, corr, fig.width = 8, fig.height=8, dpi=50, out.width="800px", out.height="800px"}
+
+# choose necessary numeric columns 
+d <- sub_loan[, c("BorrowerRate", "EmploymentStatusDuration", "CreditScoreAverage","ProsperRating..numeric.","ProsperScore", "InquiriesLast6Months", "DelinquenciesLast7Years", "BankcardUtilization", "TotalProsperLoans", "ProsperPrincipalOutstanding", "ScorexChangeAtTimeOfListing", "DebtToIncomeRatio", "StatedMonthlyIncome")]
+
+# create log columns
+d$log_DebtToIncomeRatio <- d$DebtToIncomeRatio
+d$log_StatedMonthlyIncome <- d$StatedMonthlyIncome
+
+# make Prosper Score numeric
+d$ProsperScore <- as.numeric(d$ProsperScore)
+
+# log10 transform DebtToIncomeRatio and StatedMonthlyIncome
+d$log_DebtToIncomeRatio <- ifelse(is.na(d$log_DebtToIncomeRatio) | 
+                                   d$log_DebtToIncomeRatio ==0, 0, log10(d$log_DebtToIncomeRatio))
+
+d$log_StatedMonthlyIncome <- ifelse(is.na(d$log_StatedMonthlyIncome) | 
+                                   d$log_StatedMonthlyIncome ==0, 0, log10(d$log_StatedMonthlyIncome))
+
+# make na value of TotalProsperLoans and ProsperPrincipalOutstanding
+# and ScorexChangeAtTimeOfListing be 0 by their definitions
+
+d$TotalProsperLoans <- ifelse(
+  is.na(d$TotalProsperLoans), 0, d$TotalProsperLoans)
+d$ProsperPrincipalOutstanding <- ifelse(
+  is.na(d$ProsperPrincipalOutstanding), 0, d$ProsperPrincipalOutstanding)
+d$ScorexChangeAtTimeOfListing <- ifelse(
+  is.na(d$ScorexChangeAtTimeOfListing), 0, d$ScorexChangeAtTimeOfListing)
+
+# omit other na values
+d <- na.omit(d)
+
+# create correlation matrix
+M<- cor(d)
+corrplot(M, method = "number") #plot matrix
+```
+
+Basically, the borrower rate tends to have negative relationship with 
+`Credit Score Average`, `Prosper Score` `Prosper Rating`. The more one 
+`borrower rate`, then the higher the credit risk is overall. And we can see 
+`Prosper Rating` have strong negative relationship with `borrower rate`, 
+it makes sense because `borrower rate` is determined by `Prosper Rating`. 
+In the graph bellow it shows the mean and median of Borrower Rate appears a 
+inverse relationship with Prosper Rating.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, rate_rating, dpi=40, out.width="700px", out.height="800px", fig.height=7}
+# make boxplot of ProsperRating and BorrowerRate
+gt <- ggplot(aes(x=ProsperRating..Alpha., y = BorrowerRate),
+             data = subset(sub_loan, !is.na(BorrowerRate)& !is.na(ProsperRating..Alpha.))) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  ggtitle("Borrower Rate and Prosper Rating")+
+  coord_trans( y = "sqrt")
+# make boxplot of ProsperScore and BorrowerRate
+gr <- ggplot(aes(x=ProsperScore, y = BorrowerRate), 
+             data = subset(sub_loan, !is.na(ProsperScore) & !is.na(BorrowerRate))) + 
+  geom_point(alpha = 1/20, position = position_jitter())+
+  coord_trans( y = "sqrt")
+
+grid.arrange(gt, gr)
+
+```
+
+Besides, from the matrix table we can see `Prosper Rating` have strong 
+relationship with `Prosper Score` than `Credit Score Average`. 
+**It shows again that maybe Prosper put more weight on `Prosper Score` than `Credit Score Average` to model of `Prosper Rating`.**
+
+Furthermore, `Prosper Score` shows week relationship with `Credit Score Average`, `Inquiries Last 6 Months`, `BankcardUtilization` and `log_DebtToIncomeRatio`.
+
+On the next stage, I will explore the relationship between **Prosper Score** 
+with other feature factors.
+
+## Prosper Score and Inquiries Last 6 Months
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_InquiriesLast6Months, dpi=36, out.width="600px", out.height="600px"}
+# make boxplot of ProsperScore and InquiriesLast6Months
+ggplot(aes(x=ProsperScore, y = InquiriesLast6Months), data = subset(sub_loan, !is.na(InquiriesLast6Months)& !is.na(ProsperScore) & InquiriesLast6Months <= 15)) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+# make boxplot of ProsperScore and InquiriesLast6Months
+# transform with log10
+ggplot(aes(x=ProsperScore, y = InquiriesLast6Months), data = subset(sub_loan, !is.na(InquiriesLast6Months)& !is.na(ProsperScore) & InquiriesLast6Months>0 & InquiriesLast6Months <= 15)) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  coord_trans( y = "log10")
+# make scatter plot of ProsperScore and InquiriesLast6Months
+# transform with log10
+ggplot(aes(x=ProsperScore, y = InquiriesLast6Months), data = subset(sub_loan, !is.na(InquiriesLast6Months)& !is.na(ProsperScore)& InquiriesLast6Months>0 & InquiriesLast6Months <= 15)) + 
+  geom_point(alpha = 1/10, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)+
+  coord_trans( y = "log10")
+
+```
+
+The trend between Prosper Score and number of inquiries last 6 months presents
+long tail, so I transformed the `InquiriesLast6Months` with log10, and we can see
+in the boxplot the mean of `InquiriesLast6Months` presents a more linear-inverse relationship with Prosper Score. In the scatter plot we can see that the 
+relationship is not clear, most of the loans located in the Score of 4-8 with `InquiriesLast6Months` at 1-4 times, but the trend is still present with the 
+decreasing upper bond of `InquiriesLast6Months` as Prosper Score increase.
+
+## Prosper Score and Bank Card Utilization
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_BankcardUtilization, dpi=36, out.width="600px", out.height="600px"}
+# make boxplot of ProsperScore and BankcardUtilization
+ggplot(aes(x=ProsperScore, y = BankcardUtilization), data = subset(sub_loan, !is.na(BankcardUtilization)&BankcardUtilization<=1 & !is.na(ProsperScore)&BankcardUtilization>0)) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+# make boxplot of ProsperScore and BankcardUtilization
+# transform with square root
+ggplot(aes(x=ProsperScore, y = BankcardUtilization), data = subset(sub_loan, !is.na(BankcardUtilization)&BankcardUtilization<=1 & !is.na(ProsperScore)&BankcardUtilization>0)) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  coord_trans( y = "sqrt")
+# make scatter plot of ProsperScore and BankcardUtilization
+# transform with square root
+ggplot(aes(x=ProsperScore, y = BankcardUtilization), data = subset(sub_loan, !is.na(BankcardUtilization)& !is.na(ProsperScore) & BankcardUtilization <= 1 &BankcardUtilization>0)) + 
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  coord_trans( y = "sqrt")
+
+```
+
+After transforming the `BankcardUtilization` with square root in y-axis, 
+we can see the trend is clear. The distribution of `BankcardUtilization`
+move toward to down as Prosper Score increases, with around 0.5 to 0.8 in Score 
+1-6 and spread out down to 0.25 as Prosper Score increases.
+
+## Prosper Score and Delinquencies Last 7 Years
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_DelinquenciesLast7Years, dpi=36, out.width="600px", out.height="600px"}
+# make boxplot of ProsperScore and DelinquenciesLast7Years
+ggplot(aes(x=ProsperScore, y = DelinquenciesLast7Years), 
+       data = subset(sub_loan, !is.na(DelinquenciesLast7Years) & 
+                       !is.na(ProsperScore) & DelinquenciesLast7Years >0 & DelinquenciesLast7Years <= 20 )) + 
+  geom_boxplot(outlier.alpha = 1/20) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+# make scatter of ProsperScore and DelinquenciesLast7Years
+ggplot(aes(x=ProsperScore, y = DelinquenciesLast7Years),
+       data = subset(sub_loan, !is.na(DelinquenciesLast7Years)& 
+                       !is.na(ProsperScore) & DelinquenciesLast7Years <= 20 &DelinquenciesLast7Years>0)) + 
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+
+```
+
+The trend between Prosper Score and delinquencies last 7 years is not very 
+clear across Score 1 to 7. But we can see over 50% of the bad tier Prosper Score
+loans have the largest mean and variance of delinquencies. And most of the good
+Score tier loans are mainly at 0 to 2 delinquencies.
+
+## Prosper Score and Debt To IncomeRatio
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_DebtToIncomeRatio, dpi=36, out.width="600px", out.height="600px"}
+# make boxplot of ProsperScore and DebtToIncomeRatio
+# and transform with log10
+ggplot(aes(x=ProsperScore, y = DebtToIncomeRatio), 
+       data = subset(sub_loan, !is.na(DebtToIncomeRatio) &
+                       !is.na(ProsperScore))) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  coord_cartesian(ylim = c(0.01,1)) +
+  scale_y_log10()
+# make scatter of ProsperScore and DebtToIncomeRatio
+# and transform with log10
+ggplot(aes(x=ProsperScore, y = DebtToIncomeRatio), 
+       data = subset(sub_loan, !is.na(DebtToIncomeRatio)& 
+                       !is.na(ProsperScore) & DebtToIncomeRatio <= 1 &DebtToIncomeRatio>0.01)) + 
+  geom_point(alpha = 1/20, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  scale_y_log10()
+
+```
+
+Here I transform `DebtToIncomeRatio` with log10. We can see there presents a 
+trend that `DebtToIncomeRatio` decreases as Prosper Score increase.
+
+## Prosper Score and Total Prosper Loans
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_TotalProsperLoans, dpi=36, out.width="600px", out.height="600px"}
+
+# replace na value in TotalProsperLoans column with zero
+sub_loan$TotalProsperLoans[is.na(sub_loan$TotalProsperLoans)] <- 0
+# make boxplot of ProsperScore and TotalProsperLoans
+ggplot(aes(x=ProsperScore, y = TotalProsperLoans), 
+       data = subset(sub_loan, !is.na(TotalProsperLoans) &
+                       !is.na(ProsperScore))) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+
+```
+
+We can see that Prosper Score doesn't have clear relationship with 
+`TotalProsperLoans`. The distribution appears a parabola shape.
+
+If we focus on `Total Prosper Loans` over than zero:
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_TotalProsperLoans_one, dpi=36, out.width="600px", out.height="600px"}
+# make boxplot of ProsperScore and TotalProsperLoans
+ggplot(aes(x=ProsperScore, y = TotalProsperLoans), data = subset(sub_loan,  TotalProsperLoans > 0)) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+# make scatter plot of ProsperScore and TotalProsperLoans
+ggplot(aes(x=ProsperScore, y = TotalProsperLoans), 
+       data = subset(sub_loan, !is.na(TotalProsperLoans)& !is.na(ProsperScore)&TotalProsperLoans > 0)) + 
+  geom_point(alpha = 1/20, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+
+```
+
+We can see that there are still no clear relationship, but the number of `TotalProsperLoans` significant increase in the good Prosper Score 
+tier(10 and 11).
+
+## Prosper Score and Prosper Principal Outstanding
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_ProsperPrincipalOutstanding, dpi=36, out.width="600px", out.height="600px"}
+# make na values of ProsperPrincipalOutstanding be zero
+sub_loan$ProsperPrincipalOutstanding[is.na(sub_loan$ProsperPrincipalOutstanding)] <- 0
+# make boxplot of ProsperScore and ProsperPrincipalOutstanding
+ggplot(aes(x=ProsperScore, y = ProsperPrincipalOutstanding), 
+       data = subset(sub_loan, !is.na(ProsperPrincipalOutstanding) & !is.na(ProsperScore))) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  coord_cartesian(ylim = c(0,10000))
+
+```
+
+We can see that Prosper Score has no clear relationship with `ProsperPrincipalOutstanding`. We can see that over 50% of borrowers who 
+rated as Score 1 and 2 (bad tier) have previous Prosper principal outstanding.
+
+If we exclude zero value of `ProsperPrincipalOutstanding`:
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_ProsperPrincipalOutstandingone, dpi=36, out.width="600px", out.height="600px"}
+# make boxplot of ProsperScore and ProsperPrincipalOutstanding
+# subset with ProsperPrincipalOutstanding greater than zero
+ggplot(aes(x=ProsperScore, y = ProsperPrincipalOutstanding),
+       data = subset(sub_loan, ProsperPrincipalOutstanding >0 & 
+                       !is.na(ProsperScore))) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+# make scatter plot of ProsperScore and ProsperPrincipalOutstanding
+# subset with ProsperPrincipalOutstanding greater than zero
+ggplot(aes(x=ProsperScore, y = ProsperPrincipalOutstanding), 
+       data = subset(sub_loan, !is.na(ProsperPrincipalOutstanding)& !is.na(ProsperScore)&ProsperPrincipalOutstanding > 0)) + 
+  geom_point(alpha = 1/20, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+
+```
+
+The result shows that there is no significant difference of `ProsperPrincipalOutstanding` across Prosper Score in 1 to 10, but the 
+interesting thing is the Prosper Score of 11 have the highest `ProsperPrincipalOutstanding` mean and median, and over 50% of borrower with  
+Prosper Score 11 have `ProsperPrincipalOutstanding` roughly between 5000 to 10000. However, in the scatter plot, we can see the sample of loans which has `ProsperPrincipalOutstanding` with Score 11 are very small.
+
+## Prosper Score and Scorex Change At Time Of Listing
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, score_ScorexChangeAtTimeOfListing, dpi=36, out.width="600px", out.height="600px"}
+# replace na value in ScorexChangeAtTimeOfListing column with zero
+sub_loan$ScorexChangeAtTimeOfListing[is.na(sub_loan$ScorexChangeAtTimeOfListing)] <- 0
+# make boxplot of ProsperScore and ScorexChangeAtTimeOfListing
+ggplot(aes(x=ProsperScore, y = ScorexChangeAtTimeOfListing), 
+       data = subset(sub_loan, ScorexChangeAtTimeOfListing != 0 & 
+                       !is.na(ProsperScore))) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+# make scatter plot of ProsperScore and ScorexChangeAtTimeOfListing
+ggplot(aes(x=ProsperScore, y = ScorexChangeAtTimeOfListing), 
+       data = subset(sub_loan, ScorexChangeAtTimeOfListing != 0 & 
+                       !is.na(ProsperScore))) + 
+  geom_point(alpha = 1/20, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+
+```
+
+The trend between Prosper Score and ScorexChangeAtTimeOfListing is clear, with increasing trend as Score increases.
+
+## Prosper Score and EmploymentStatusDuration
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+# make boxplot of ProsperScore and EmploymentStatusDuration
+ggplot(aes(x=ProsperScore, y = EmploymentStatusDuration/12),
+       data = subset(sub_loan, EmploymentStatusDuration <= 720 & 
+                       !is.na(ProsperScore))) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+# make scatter plot of ProsperScore and EmploymentStatusDuration
+ggplot(aes(x=ProsperScore, y = EmploymentStatusDuration/12), 
+       data = subset(sub_loan, EmploymentStatusDuration <= 720 & 
+                       !is.na(ProsperScore))) + 
+  geom_point(alpha = 1/20, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+
+```
+
+We can see that Prosper Score doesn't have clear relationship with `EmploymentStatusDuration` in years.
+
+### Prosper Score and Income Range
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+# make scatter plot of ProsperScore and IncomeRange
+ggplot(aes(x=ProsperScore, y = IncomeRange), 
+       data = subset(sub_loan,  !is.na(ProsperScore))) + 
+  geom_point(alpha = 1/20, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4)
+
+```
+
+We can see most of lower level of Prosper Score in 1 to 6 are primarily located
+on $25,000 to 75,000 of income range. And most of higher level of Prosper Score 
+in 8 to 10 are primarily located on $75,000+ area, but the variance is large.
+
+### Prosper Score and Stated Monthly Income
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+# make boxplot of ProsperScore and StatedMonthlyIncome
+# and transform with log10
+ggplot(aes(x=ProsperScore, y = StatedMonthlyIncome), data = subset(sub_loan, StatedMonthlyIncome <= 20000 & !is.na(ProsperScore))) + 
+  geom_boxplot() +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  scale_y_log10() +
+  coord_cartesian(ylim = c(1000,10000))
+# make scatter plot of ProsperScore and StatedMonthlyIncome
+# and transform with log10
+ggplot(aes(x=ProsperScore, y = StatedMonthlyIncome), data = subset(sub_loan,  StatedMonthlyIncome <= 20000 & !is.na(ProsperScore))) + 
+  geom_point(alpha = 1/20, position = position_jitter()) +
+  stat_summary(fun.y = mean, geom = 'point', shape = 4) +
+  scale_y_log10() +
+  coord_cartesian(ylim = c(1000,10000))
+
+```
+
+We can see the trend between Prosper Score and StatedMonthlyIncome is clear, with increasing trend as Score increases.
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the \
+investigation. How did the feature(s) of interest vary with other features in \
+the dataset?
+
+There is a clear inverse relationship between `Prosper Rating` and proportion of
+high risk loan. Better levels of Prosper Rating tend to occur more often at lower percentage of high risk loans.
+
+And `Prosper Rating` tend to have more stronger relationship with `Prosper Score`
+than `Credit Average Score` in the respect of linear relationship. The variance of `CreditScoreAverage` in each Prosper Rating is larger than `Prosper Score` across Prosper Rating.
+
+### Did you observe any interesting relationships between the other features \
+(not the main feature(s) of interest)?
+
+Prosper Score tend to have inverse trend with `InquiriesLast6Months`, `BankcardUtilization`, `DebtToIncomeRatio`. The better levels of Prosper 
+Score, the less levels of each factor.
+
+Prosper Score tend to have positive trend with `ScorexChangeAtTimeOfListing`, `IncomeRange` and `StatedMonthlyIncome`. The more better levels of Prosper Score,
+the more levels of each factor.
+
+I was impressed that `Scorex Change At Time Of Listing` has very clear trend with Prosper Score since `ScorexChangeAtTimeOfListing` only takes account the change of Credit Score relative to the borrower's last Prosper loan, not a longer period 
+of Credit Score.
+
+### What was the strongest relationship you found?
+
+The Prosper Rating is positively and strongly correlated with Borrower Rate since Prosper Rating determines the Borrower Rate on the Prosper model.
+In matrix table and scatter plot, they show Prosper Rating have strong 
+relationship with Prosper Score than Credit Score Average.
+So I look closer at the relationship between Prosepr Score and other factors, 
+I found `BankCardUtilization`(-) and `DebtToIncomeRatio`(-) have strongest 
+inverse trend with Prosper Score. `ScorexChangeAtTimeOfListing` and `StatedMonthlyIncome` have strongest positive trend with Prosper Score.
+
+The other factor has more weak inverse relationship with Prosper Score includes `InquiriesLast6Months`.
+
+# Multivariate Plots Section
+
+In previous section we found some patterns between Prosper Score and risk 
+matrices as well as borrower factors. In this section I will add the factor of
+loan status to do more wider exploration.
+
+## Prosper Rating vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, rating_Score_status, dpi=40, out.width="700px", out.height="800px", fig.height=7}
+# plot scatter plot of Prosper Rating vs. Prosper Score vs. LoanStatus
+g17 <- ggplot(aes(x=ProsperScore, y = ProsperRating..Alpha.), 
+              data = subset(sub_loan, !is.na(ProsperScore) & !is.na(ProsperRating..Alpha.))) + 
+  geom_point(aes(color = CompletedOrRisk),alpha = 1/20, position = position_jitter())
+# plot scatter plot of Prosper Rating vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g18 <- ggplot(aes(x=ProsperScore, y = ProsperRating..Alpha.),
+              data = subset(sub_loan, !is.na(ProsperScore) & !is.na(ProsperRating..Alpha.))) + 
+  geom_point(alpha = 1/20, position = position_jitter())+
+  facet_wrap(~CompletedOrRisk)
+
+grid.arrange(g17, g18)
+
+```
+
+First start with relationship between Prosper Score, Prosper Rating and Loan
+Status. On the upper graph, we can see there is a clear color spectrum in the 
+Prosper Score & Prosper Rating graph. It seems like the distributions of high risk/completed loans in Prosper Rating and Prosper Score are consistent. High 
+risk loans tend to locate in the lower-left area which are the areas of low-tier
+Rating and Score. Completed loans tend to locate in the upper side area which 
+stands for the good rating loans.
+
+Look closer at the second graph, we can see that the distributions of completed 
+loans are wide across `ProsperRating` holding Prosper Score constant. While high
+risk loans distribute more concentrate along with a diagonal. Seems like the
+measurement is more consistent in the high risk loans.
+
+## Borrower Rate vs. Prosper Score vs. LoanStatus
+
+Since Prosper Rating correlated strongly with Borrower Rate that were seen 
+earlier, I want to explore the trend between Borrower Rate vs. Prosper Score vs. LoanStatus.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, rate_Score_status, dpi=40, out.width="700px", out.height="800px", fig.height=7}
+# plot scatter plot of Borrower Rate vs. Prosper Score vs. LoanStatus
+g19 <- ggplot(aes(x=ProsperScore, y = BorrowerRate), 
+              data = subset(sub_loan, !is.na(ProsperScore) & 
+                              !is.na(BorrowerRate))) + 
+  geom_point(aes(color = CompletedOrRisk), 
+             alpha = 1/20, 
+             position = position_jitter(h = 0))+
+  coord_trans( y = "sqrt")
+# plot scatter plot of Borrower Rate vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g20 <- ggplot(aes(x=ProsperScore, y = BorrowerRate), 
+              data = subset(sub_loan, !is.na(ProsperScore) & 
+                              !is.na(BorrowerRate))) + 
+  geom_point(alpha = 1/20, position = position_jitter())+
+  facet_wrap(~CompletedOrRisk)+
+  coord_trans( y = "sqrt")
+
+grid.arrange(g19, g20)
+
+```
+
+We can see that there is a clear trend between Prosper Score, Borrower 
+Rate and Loan Status. Borrower rate decreases as Prosper Score increases, and 
+the scope of borrower rate moves toward down as Prosper Score increases. Holding
+Prosper Score constant, from the color spectrum, we can see high risk loans tend
+to have higher borrower rate and distributed in the 1-6 of Prosper Score. The
+plot below shows that completed loans tend to locate at bottom right side with 
+Score of 6-10, but there are still have some loans have highest rate across 
+Score 1-6. And we can see most of the high risk loans are the loans with highest
+rate and with Score 1-6. We can see that the distribution is more variated in
+Completed loans than high risk loans across each Prosper Score. 
+
+## Borrower Rate vs. Prosper Rating vs. LoanStatus
+
+Again, we see that Completed loans have the high variated borrower rate holding 
+Prosper Score constant, while most of high risk loans are with Prosper Score 1-6
+and with borrower rate around 0.3, which implies that they are more consistent 
+between Prosper Score and Prosper Rating than completed loan.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, rate_Rating_status, dpi=40, out.width="800px", out.height="800px"}
+# plot scatter plot of Borrower Rate vs. Prosper Rating vs. LoanStatus
+ggplot(aes(x=ProsperRating..Alpha., y = BorrowerRate), 
+       data = subset(sub_loan, !is.na(ProsperRating..Alpha.) &
+                       !is.na(BorrowerRate))) + 
+  geom_point(alpha = 1/20, position = position_jitter())+
+  facet_wrap(~CompletedOrRisk)+
+  coord_trans( y = "sqrt")
+
+```
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, rate_Credit_status, dpi=40, out.width="800px", out.height="800px"}
+# plot scatter plot of Borrower Rate vs. Prosper Rating vs. LoanStatus
+# group by CompletedOrRisk
+ggplot(aes(x=CreditScoreAverage, y = BorrowerRate), 
+       data = subset(sub_loan, CreditScoreAverage != "" & 
+                       !is.na(ProsperRating..Alpha.) & 
+                       CreditScoreAverage>=630 &
+                       CreditScoreAverage<=900)) + 
+  geom_point(alpha = 1/20, position = position_jitter())+
+  facet_wrap(~CompletedOrRisk)+
+  coord_trans( y = "sqrt")
+
+```
+
+Again, we can see that high risk loans tend to concentrate on the lower Prosper
+Rating, lower Prosper Score and lower borrower rate area, while completed loans
+are located more discrete.
+
+Let's take a closer look at relationship of some factors between completed loans
+and high risk loans.
+
+## Inquiries Last 6 Months vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, inquiries_Score_status, dpi=40, out.width="700px", out.height="800px", fig.height=7}
+# plot scatter plot of Inquiries Last 6 Months vs. Prosper Score vs. LoanStatus
+g21 <- ggplot(aes(x=ProsperScore, y = InquiriesLast6Months),
+              data = subset(sub_loan, !is.na(InquiriesLast6Months)& !is.na(ProsperScore)& InquiriesLast6Months>0 & InquiriesLast6Months <= 15)) + 
+  geom_point(aes(color = CompletedOrRisk),alpha = 1/10, position = position_jitter()) +
+  coord_trans( y = "log10")
+# plot scatter plot of Inquiries Last 6 Months vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g22 <- ggplot(aes(x=ProsperScore, y = InquiriesLast6Months),
+              data = subset(sub_loan, !is.na(InquiriesLast6Months) &
+                              !is.na(ProsperScore) & 
+                              InquiriesLast6Months>0 &
+                              InquiriesLast6Months <= 15)) + 
+  geom_point(alpha = 1/10, position = position_jitter())+
+  coord_trans( y = "log10")+
+  facet_wrap(~CompletedOrRisk)
+
+grid.arrange(g21, g22)
+
+```
+
+On higher tier of Prosper Score, high risk loans tend to have higher Inquiries 
+in last 6 months holding Prosper Score constant. But the trend is not very clear
+on the low-tier Prosper Score.
+
+## Bank Card Utilization vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, Utilization_Score_status, dpi=40, out.width="700px", out.height="800px", fig.height=7}
+# plot scatter plot of Bank Card Utilization vs. Prosper Score vs. LoanStatus
+g23 <- ggplot(aes(x=ProsperScore, y = BankcardUtilization), 
+              data = subset(sub_loan, !is.na(BankcardUtilization) & 
+                              BankcardUtilization <= 1 &
+                              !is.na(ProsperScore) & 
+                              BankcardUtilization>0)) +
+  geom_point(
+    aes(color = CompletedOrRisk), alpha = 1/20, position = position_jitter())+
+  coord_trans( y = "sqrt")
+# plot scatter plot of Bank Card Utilization vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g24 <- ggplot(aes(x=ProsperScore, y = BankcardUtilization),
+              data = subset(sub_loan, !is.na(BankcardUtilization) & 
+                              BankcardUtilization <= 1 & 
+                              !is.na(ProsperScore) & 
+                              BankcardUtilization>0)) +
+  geom_point(alpha = 1/20, position = position_jitter())+
+  facet_wrap(~CompletedOrRisk)+
+  coord_trans( y = "sqrt")
+
+grid.arrange(g23, g24)
+
+```
+
+We can see that the trend is very clear. High risk loans tend to have lower
+Prosper Score of 1 to 5 with higher `BankcardUtilization` of 0.5 to 1. Completed
+loans tend to have higher Prosper Score of 8 to 10 with more border range of  `BankcardUtilization` of 0.25 to 1. 
+
+## DelinquenciesLast7Years vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, DelinquenciesLast7Years_Score_status, dpi=40, out.width="600px", out.height="800px",fig.height=7}
+# plot scatter plot of DelinquenciesLast7Years vs. Prosper Score vs. LoanStatus
+g25 <- ggplot(aes(x=ProsperScore, y = DelinquenciesLast7Years), 
+              data = subset(sub_loan, !is.na(DelinquenciesLast7Years)
+                            & !is.na(ProsperScore) &
+                              DelinquenciesLast7Years <= 20 & 
+                              DelinquenciesLast7Years>0)) +
+  geom_point(
+    aes(color = CompletedOrRisk), alpha = 1/15, position = position_jitter())
+# plot scatter plot of DelinquenciesLast7Years vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g26 <- ggplot(aes(x=ProsperScore, y = DelinquenciesLast7Years),
+              data = subset(sub_loan, !is.na(DelinquenciesLast7Years) &
+                              !is.na(ProsperScore) &
+                              DelinquenciesLast7Years <= 20 & 
+                              DelinquenciesLast7Years>0)) +
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  facet_wrap(~CompletedOrRisk)
+
+grid.arrange(g25, g26)
+
+```
+
+Still, we can see the distribution of completed loans and high risk loans in 
+the respect of Prosper Score VS. `DelinquenciesLast7Years` are similar. Most of
+the both loans are with Score 4-8 and with lower level of 
+`DelinquenciesLast7Years`.
+
+## DebtToIncomeRatio vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, DebtToIncomeRatio_Score_status, dpi=40, out.width="600px", out.height="800px", fig.height=7}
+# plot scatter plot of DebtToIncomeRatio vs. Prosper Score vs. LoanStatus
+g27 <- ggplot(aes(x=ProsperScore, y = DebtToIncomeRatio), 
+              data = subset(sub_loan, !is.na(DebtToIncomeRatio) & 
+                              !is.na(ProsperScore) &
+                              DebtToIncomeRatio <= 1 & 
+                              DebtToIncomeRatio>0.01)) +
+  geom_point(
+    aes(color = CompletedOrRisk), alpha = 1/15, position = position_jitter()) +
+  scale_y_log10()
+# plot scatter plot of DebtToIncomeRatio vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g28 <- ggplot(aes(x=ProsperScore, y = DebtToIncomeRatio), 
+              data = subset(sub_loan, !is.na(DebtToIncomeRatio) & 
+                              !is.na(ProsperScore) &
+                              DebtToIncomeRatio <= 1 & 
+                              DebtToIncomeRatio>0.01)) +
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  facet_wrap(~CompletedOrRisk) +
+  scale_y_log10()
+
+grid.arrange(g27, g28)
+
+```
+
+We can see there is a clear trend between Prosper Score and Debt to Income 
+Ratio in the respect to status of loan. High risk loans tend to have lower 
+Prosper Score at 1 to 6 and with 0.5 to 1 of Debt to Income Ratio. Completed
+loans tend to have higher level of Prosper Score at 6-10 as well as have more 
+variated Debt to Income Ratio ranged 0.1 to 0.6.
+
+## TotalProsperLoans vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, TotalProsperLoans_Score_status, dpi=40, out.width="600px", out.height="800px",fig.height=7}
+# plot scatter plot of TotalProsperLoans vs. Prosper Score vs. LoanStatus
+g29 <- ggplot(aes(x=ProsperScore, y = TotalProsperLoans),
+              data = subset(sub_loan, !is.na(TotalProsperLoans) & 
+                              !is.na(ProsperScore) & 
+                              TotalProsperLoans >0)) +
+  geom_point(aes(
+    color = CompletedOrRisk), 
+             alpha = 1/15, 
+             position = position_jitter()) 
+# plot scatter plot of TotalProsperLoans vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g30 <- ggplot(aes(x=ProsperScore, y = TotalProsperLoans), data = subset(sub_loan, !is.na(TotalProsperLoans) & !is.na(ProsperScore) &TotalProsperLoans>0)) +
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  facet_wrap(~CompletedOrRisk)
+
+grid.arrange(g29, g30)
+
+```
+
+We can see high risk loans tend to have lower Prosper Score around 1 to 4; 
+completed loans tend to have score around 5 to 10. But the times of 
+`TotalProsperLoans` has no difference between completed loans and high risk loans.
+
+## ProsperPrincipalOutstanding vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, ProsperPrincipalOutstanding_Score_status, dpi=40, out.width="600px", out.height="800px, fig.height=7"}
+# plot scatter plot of ProsperPrincipalOutstanding vs.
+# Prosper Score vs. LoanStatus
+g31 <- ggplot(aes(x=ProsperScore, y = ProsperPrincipalOutstanding), 
+              data = subset(sub_loan, !is.na(ProsperPrincipalOutstanding) &
+                              !is.na(ProsperScore) & 
+                              ProsperPrincipalOutstanding >0)) +
+  geom_point(aes(
+    color = CompletedOrRisk),
+    alpha = 1/15, 
+    position = position_jitter()) 
+# plot scatter plot of ProsperPrincipalOutstanding vs.
+# Prosper Score group by CompletedOrRisk
+g32 <- ggplot(aes(x=ProsperScore, y = ProsperPrincipalOutstanding), data = subset(sub_loan, !is.na(ProsperPrincipalOutstanding) & !is.na(ProsperScore) &ProsperPrincipalOutstanding>0)) +
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  facet_wrap(~CompletedOrRisk)
+
+grid.arrange(g31, g32)
+
+```
+
+We can see high risk loans tend to have lower Prosper Score around 1 to 5; 
+completed loans tend to have score around 5 to 10. And the times of 
+`TotalProsperLoans` has some trend between completed loans and high risk loans.
+High risk loans tend to have higher `ProsperPrincipalOutstanding` and completed 
+loans tend to have lower `ProsperPrincipalOutstanding` holding Prosper Score 
+constant.
+
+## ScorexChangeAtTimeOfListing vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, ScorexChangeAtTimeOfListing_Score_status, dpi=40, out.width="600px", out.height="800px, fig.height=7"}
+# plot scatter plot of ScorexChangeAtTimeOfListing vs. Prosper Score 
+# vs. LoanStatus
+g33 <- ggplot(aes(x=ProsperScore, y = ScorexChangeAtTimeOfListing), 
+              data = subset(sub_loan, !is.na(ScorexChangeAtTimeOfListing) &
+                              !is.na(ProsperScore) & 
+                              ScorexChangeAtTimeOfListing !=0)) +
+  geom_point(aes(
+    color = CompletedOrRisk), 
+    alpha = 1/15, 
+    position = position_jitter()) 
+# plot scatter plot of ScorexChangeAtTimeOfListing vs. Prosper Score 
+# vs. LoanStatus group by CompletedOrRisk
+g34 <- ggplot(aes(x=ProsperScore, y = ScorexChangeAtTimeOfListing), 
+              data = subset(sub_loan, !is.na(ProsperPrincipalOutstanding) &
+                              !is.na(ProsperScore) & 
+                              ScorexChangeAtTimeOfListing !=0)) +
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  facet_wrap(~CompletedOrRisk)
+
+grid.arrange(g33, g34)
+
+```
+
+We can see that the trend is very clear. High risk loans tend to have lower 
+Prosper Score of 1 to 6 and lower `ScorexChangeAtTimeOfListing` of -100 to 50.
+Completed loans tend to have higher Prosper Score of 6 to 10 and higher `ScorexChangeAtTimeOfListing` of -50 to 100.
+
+## IncomeRange vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, IncomeRange_Score_status, dpi=40, out.width="600px", out.height="800px, fig.height=7"}
+# plot scatter plot of IncomeRange vs. Prosper Score vs. LoanStatus
+g35 <- ggplot(aes(x=ProsperScore, y = IncomeRange), 
+              data = subset(sub_loan, !is.na(IncomeRange) & 
+                              !is.na(ProsperScore))) +
+  geom_point(aes(
+    color = CompletedOrRisk), 
+    alpha = 1/15, 
+    position = position_jitter()) 
+# plot scatter plot of IncomeRange vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g36 <- ggplot(aes(x=ProsperScore, y = IncomeRange),
+              data = subset(sub_loan, !is.na(IncomeRange) & 
+                              !is.na(ProsperScore))) +
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  facet_wrap(~CompletedOrRisk)
+
+grid.arrange(g35, g36)
+
+```
+
+We can see that the trend is clear. High risk loans tend to have lower Prosper
+Score of 1 to 6 with lower `IncomeRange` of $0 to $50,000. Completed loans tend 
+to have higher Prosper Score of 6 to 10 and higher `IncomeRange` of $50,000+.
+
+## StatedMonthlyIncome vs. Prosper Score vs. LoanStatus
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, StatedMonthlyIncome_Score_status, dpi=40, out.width="600px", out.height="800px, fig.height=7"}
+# plot scatter plot of StatedMonthlyIncome vs. Prosper Score vs. LoanStatus
+g37 <- ggplot(aes(x=ProsperScore, y = StatedMonthlyIncome), 
+              data = subset(sub_loan, !is.na(StatedMonthlyIncome) & 
+                              !is.na(ProsperScore) &
+                              StatedMonthlyIncome <= 20000 )) +
+  geom_point(aes(
+    color = CompletedOrRisk), 
+    alpha = 1/15, 
+    position = position_jitter()) 
+# plot scatter plot of StatedMonthlyIncome vs. Prosper Score vs. LoanStatus
+# group by CompletedOrRisk
+g38 <- ggplot(aes(x=ProsperScore, y = StatedMonthlyIncome), 
+              data = subset(sub_loan, !is.na(StatedMonthlyIncome) &
+                              !is.na(ProsperScore) & 
+                              StatedMonthlyIncome <= 20000)) +
+  geom_point(alpha = 1/15, position = position_jitter()) +
+  facet_wrap(~CompletedOrRisk)
+
+grid.arrange(g37, g38)
+
+```
+
+We can see that the trend is clear. High risk loans tend to have lower Prosper
+Score of 1 to 6 with lower `StatedMonthlyIncome` of $0 to $5,000. Completed 
+loans tend to have higher Prosper Score of 6 to 10 and higher `IncomeRange` of 
+$5,000 to $15,000.
+
+Since `DebtToIncomeRatio`, `IncomeRange` and `StatedMonthlyIncome` have the 
+similar property and distribution, I will pick `DebtToIncomeRatio` for further investigation. 
+
+These plots which have trends suggest that we can build a Logistic model and 
+use those variables in the model to predict the probability of one loan would be completed or high risk.
+
+## Linear Model
+
+### Data Preparation
+
+I create a target variable called `Status` which has two values. "1" for 
+`HighRisk` in `LoanStatus`, the other is "0" for `Completed`.
+
+I also choose 4 features which I found they have trends with Status of loans from previous section, and make those 4 as the input variables of the model. I also 
+replace the NAs with median. These 4 features are `BankcardUtilization`, `DebtToIncomeRatio`, `ProsperPrincipalOutstanding`, `ScorexChangeAtTimeOfListing`.
+
+### Logistic Regression Model
+
+First let's check out the NA values and fill them with median.
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+# create a target variable called `Status`.
+# "1" for `HighRisk`, "0" for `Completed`.
+sub_loan$Status <- ifelse(
+  sub_loan$CompletedOrRisk == "HighRisk", 1, 0)
+# choose preditor variables store in ds
+ds <- sub_loan[, c("Status", "BankcardUtilization", "DebtToIncomeRatio", "ProsperPrincipalOutstanding", "ScorexChangeAtTimeOfListing")]
+# check out the na values in ds
+sapply(ds, function(x) sum(is.na(x)))
+```
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+# replace na values of each preditor variables
+# with median
+ds$BankcardUtilization[is.na(ds$BankcardUtilization)] <- median(ds$BankcardUtilization,na.rm=T)
+
+ds$DebtToIncomeRatio[is.na(ds$DebtToIncomeRatio)] <- median(ds$DebtToIncomeRatio,na.rm=T)
+# fit the logit model
+model <- glm(Status ~.,family=binomial(link='logit'),data=ds)
+# print out the moddel result
+summary(model)
+
+```
+
+We can see three of four variables are statistically significant.
+The negative coefficient for `ScorexChangeAtTimeOfListing` predictor suggests 
+that all other variables being equal, the higher `ScorexChangeAtTimeOfListing` 
+of loans are less likely to be high risk. The positive coefficients for other 
+predictors suggest that the higher `BankcardUtilization` and `DebtToIncomeRatio`
+of loans are more likely to be high risk.
+
+Further transform them for interpretation of odds:
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+# transform coefficeint of the model
+# and transform them for interpretation of odds
+coefs <- coef(model)
+exp(coefs)
+(exp(coefs)-1)*100
+```
+
+- Holding other factors constant, for a point increase in 
+`BankcardUtilization`, we expect to see a 4.76% increase in the odds of being a 
+high risk loan.
+
+- Holding other factors constant, for a point increase in `DebtToIncomeRatio`,
+we expect to see a 1.34% increase in the odds of being a high risk loan.
+
+- Holding other factors constant, for a point increase in `ScorexChangeAtTimeOfListing`, we expect to see a 5.33% decrease in the odds of
+being a high risk loan.
+
+I want to see will `CreditScoreAverage` have the predict ability? So I take `CreditScoreAverage` be the only one feature of the model:
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+# create a dataset of model 2 contains preditor `CreditScoreAverage`
+ds2 <- sub_loan[, c("Status", "CreditScoreAverage")]
+# check out the na values
+sapply(ds2, function(x) sum(is.na(x)))
+# replace na values of each preditor variables
+# with median
+ds2$CreditScoreAverage[is.na(ds2$CreditScoreAverage)] <- median(ds2$CreditScoreAverage,na.rm=T)
+# fit the logit model
+model2 <- glm(Status ~.,family=binomial(link='logit'),data=ds2)
+# print out the moddel result
+summary(model2)
+# transform coefficeint of the model
+# and transform them for interpretation of odds
+coefs2 <- coef(model2)
+exp(coefs2)
+(exp(coefs2)-1)*100
+
+```
+
+- Holding other factors constant, for a one point increase in 
+`CreditScoreAverage`, we expect to see a 0.66% decrease in the odds of being a
+high risk loan.
+
+Let's check out the `ProsperScore`. Take `ProsperScore` be the only one feature 
+of the model:
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+# create a dataset of model 3 contains preditor `ProsperScore`
+ds3 <- sub_loan[, c("Status", "ProsperScore")]
+# check out the na values
+sapply(ds3, function(x) sum(is.na(x)))
+# omit the na values
+ds3 <- na.omit(ds3)
+# fit the logit model
+model3 <- glm(Status ~.,family=binomial(link='logit'),data=ds3)
+# print out the moddel result
+summary(model3)
+# transform coefficeint of the model
+# and transform them for interpretation of odds
+coefs3 <- coef(model3)
+exp(coefs3)
+(exp(coefs3)-1)*100
+
+```
+
+We can see for a one level of Prosper Score increase, we expect to see the 
+probability of being a high risk loan decrease holding other factors constant.
+
+### Assessing the predictive ability of the model
+
+Let's plot the ROC curve and calculate the AUC (area under the curve) which 
+are typical performance measurements for a binary classifier.
+
+First start with the model 1 which with 4 significant variables:
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+
+library(ROCR)
+p <- predict(model, newdata=ds, type="response")
+pr <- prediction(p, ds$Status)
+# Performance function
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+# Plot ROC curve
+plot(prf)
+# calculate auc
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+```
+
+The AUC ratio for this Logistic Regression Model is 0.6345.
+
+And for the model 2 only with `CreditScoreAverage` to predict the loan status:
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+
+p <- predict(model2, newdata=ds2, type="response")
+pr <- prediction(p, ds2$Status)
+# Performance function
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+# Plot ROC curve
+plot(prf)
+# calculate auc
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+```
+
+The AUC ratio for this Logistic Regression Model is 0.6355.
+
+The last is for the model 3 only with `ProsperScore` to predict the loan status:
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, dpi=36, out.width="600px", out.height="600px"}
+
+p <- predict(model3, newdata=ds3, type="response")
+pr <- prediction(p, ds3$Status)
+# Performance function
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+# Plot ROC curve
+plot(prf)
+# calculate auc
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+```
+
+The AUC ratio for this Logistic Regression Model is 0.6488.
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the \
+investigation. Were there features that strengthened each other in terms of \
+looking at your feature(s) of interest?
+
+In this section, I investigate the relationship between status of loans and each
+related factors across each Prosepr Score. Most of the time, there is a clear 
+trend between completed loans and high risk loan across Prosper Score. High risk
+loans primarily located at lower tier of Prosper Score; and Completed loans 
+primarily located at higher tier of Prosepr Score holding other factor constant. 
+
+Holding Prosper Score constant, `BankCardUtilization`, `DebtToIncomeRatio`,`ProsperPrincipalOutstanding`, `ScorexChangeAtTimeOfListing`, `IncomeRange` and `StatedMonthlyIncome` has clear trend with Status of loans. 
+From the plot sections, we can see high risk loans tend to have higher `BankCardUtilization`, `DebtToIncomeRatio` and `ProsperPrincipalOutstanding`, 
+and have lower `ScorexChangeAtTimeOfListing`, `IncomeRange` and 
+`StatedMonthlyIncome`.
+
+These results suggest that I can build a Logistic regression model and use those variables in the model to predict the probability of one loan would be completed
+or high risk. The results of the model are summarized below. 
+
+### Were there any interesting or surprising interactions between features?
+
+The most surprising pattern I found is Completed loans always have high `BankCardUtilization` across each Prosper Score. Generally, I think higher tier 
+of Prosper Score like 8 to 10 would have lower range of `BankCardUtilization`,
+but in these plots it shows loans which are higher tier of Prosper Score are also dominating the higher level of `BankCardUtilization`.
+
+### OPTIONAL: Did you create any models with your dataset? Discuss the \
+strengths and limitations of your model.
+
+Yes, I created 3 Logistic Regression model with the dataset. We can see all 
+three models have some predictive power for loan quality, but the power is weak.
+And we can see these three models have the similar predictive powers with AUC 
+ratio of 0.55 to 0.64. The lowest AUC is of the model one which contains the four features I picked; and the other two model with AUC around 0.64 are with the
+features `Prosper Score` and `CreditScoreAverage`. Seems like directly using 
+these two risk metrices is enough than using other four metrices at a time to 
+predict a loan be high risk or not.
+
+I think there are still some rooms to improve these abilities.
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, Plot_One, dpi=50, out.width="600px", out.height="900px", fig.height=7}
+# plot the percentage of CompletedOrRisk in each CreditGrade
+g13 <- ggplot(aes(x=CreditGrade, fill = CompletedOrRisk),
+              data = subset(sub_loan, !is.na(CreditGrade))) + 
+  geom_bar(position = "fill") +
+  ggtitle("Credit Grade V.S. Loan Status(Adopted before 2009)")
+# plot the percentage of CompletedOrRisk in each ProsperRating
+g14 <- ggplot(aes(x=ProsperRating..Alpha., fill = CompletedOrRisk), 
+              data = subset(sub_loan, !is.na(ProsperRating..Alpha.))) + 
+  geom_bar(position = "fill") +
+  ggtitle("Prosper Rating V.S. Loan Status(Adopted after 2009)")
+
+grid.arrange(g13, g14)
+
+```
+
+### Description One
+
+The percentage of High Risk loan appears an inverse relationship with both of
+Prosper Rating and Credit Grade. The lower percentage of High Risk loan, the 
+better the **Prosper Rating** is. And we can see that the whole high risk 
+loan actually decrease after **Prosper Rating** was launched.
+
+### Plot Two
+
+```{r echo= FALSE, message=FALSE, warning=FALSE, Plot_Two, dpi=50, out.width="600px", out.height="900px", fig.height=7}
+# plot scatter plot of ProsperScore and ProsperRating..Alpha.
+g39 <- ggplot(aes(x=ProsperRating..Alpha., y = as.numeric(ProsperScore)), 
+              data = subset(sub_loan, !is.na(ProsperScore)& !is.na(ProsperRating..Alpha.))) + 
+  geom_point(alpha = 1/20, position = 'jitter')+
+  geom_line(stat = 'summary', fun.y = mean , group = 1)+
+  ggtitle("Prosper Rating V.S. Prosper Score")
+# plot scatter plot of CreditScoreAverage and ProsperRating..Alpha.
+g40 <- ggplot(aes(x=ProsperRating..Alpha., y = CreditScoreAverage), 
+              data = subset(sub_loan, !is.na(CreditScoreAverage)& !is.na(ProsperRating..Alpha.))) + 
+  geom_point(alpha = 1/20, position = 'jitter') +
+  geom_line(stat = 'summary', fun.y = mean , group = 1)+
+  ggtitle("Prosper Rating V.S. Credit Score Average)")
+
+grid.arrange(g39, g40)
+
+```
+
+### Description Two
+
+The trend between `ProsperRating` and `ProsperScore` appear a slightly positive
+shape, and the variance of Prosper Score in each Prosper Rating is more 
+concentrated. Compared to `CreditScoreAverage`, the variance of
+`CreditScoreAverage` in each Prosper Rating is kind of large. Seems like Prosper
+put more weights of `Prosper Score` than `Credit Score Average` on their own 
+Prosper Rating model.
+
+### Plot Three
+
+```{r echo=FALSE, Plot_Three, fig.width = 11, fig.height=8, dpi=50, out.width="800px", out.height="900px"}
+# plot scatter plot of Prosper Score V.S. ScorexChangeAtTimeOfListing
+# V.s. LoanStaus
+g41 <- ggplot(aes(x=ProsperScore, y = ScorexChangeAtTimeOfListing),
+              data = subset(sub_loan, !is.na(ScorexChangeAtTimeOfListing) &
+                              !is.na(ProsperScore) & 
+                              ScorexChangeAtTimeOfListing !=0)) +
+  geom_point(
+    aes(color = CompletedOrRisk), 
+    alpha = 1/10,
+    position = position_jitter()) +
+  ggtitle("Loan Staus by \nProsper Score and Score X Change") +
+  guides(color=guide_legend(title="Loan\nStatus",
+                            override.aes = list(alpha = 1))) +
+  xlab("Prosper Score (Credit Rating)") +
+  ylab("Score Change at Listing Time")
+
+# plot scatter plot of Prosper Score V.S. BankcardUtilization V.s. LoanStaus
+
+g42 <- ggplot(aes(x=ProsperScore, y = BankcardUtilization), 
+              data = subset(sub_loan, !is.na(BankcardUtilization) &
+                              BankcardUtilization <= 1 &
+                              !is.na(ProsperScore) & 
+                              BankcardUtilization>0)) +
+  geom_point(
+    aes(color = CompletedOrRisk), 
+    alpha = 1/10,
+    position = position_jitter())+
+  coord_trans( y = "sqrt") +
+  ggtitle("Loan Staus by \nProsper Score and Bank Card Utilization") +
+  guides(color=guide_legend(title="Loan\nStatus",
+                            override.aes = list(alpha = 1)))+
+  xlab("Prosper Score (Credit Rating)") +
+  ylab("Bank Card Utilization")
+
+# plot scatter plot of Prosper Score V.S. DebtToIncomeRatio V.s. LoanStaus
+g43 <- ggplot(aes(x=ProsperScore, y = DebtToIncomeRatio), 
+              data = subset(sub_loan, !is.na(DebtToIncomeRatio) &
+                              !is.na(ProsperScore)& DebtToIncomeRatio <= 1 & 
+                              DebtToIncomeRatio>0.01)) +
+  geom_point(
+    aes(color = CompletedOrRisk),
+    alpha = 1/10,
+    position = position_jitter()) +
+  scale_y_log10() +
+  ggtitle("Loan Staus by \nProsper Score and Debt to Income Ratio") +
+  guides(color=guide_legend(title="Loan\nStatus",
+                            override.aes = list(alpha = 1))) +
+  xlab("Prosper Score (Credit Rating)") +
+  ylab("Debt to Income Ratio")
+
+# plot scatter plot of Prosper Score V.S. ProsperPrincipalOutstanding 
+# V.s. LoanStaus
+g44 <- ggplot(aes(x=ProsperScore, y = ProsperPrincipalOutstanding), 
+              data = subset(sub_loan, !is.na(ProsperPrincipalOutstanding) &
+                              !is.na(ProsperScore) &
+                              ProsperPrincipalOutstanding >0)) +
+  geom_point(aes(
+    color = CompletedOrRisk), 
+    alpha = 1/10, 
+    position = position_jitter()) +
+  ggtitle("Loan Staus by \nProsper Score and Prosper Principal Outstanding") +
+  guides(color=guide_legend(title="Loan\nStatus",
+                            override.aes = list(alpha = 1)))+
+  xlab("Prosper Score (Credit Rating)") +
+  ylab("Principal Outstanding ($)")
+
+grid.arrange(g41, g42, g43, g44, ncol = 2)
+
+```
+
+### Description Three
+
+I pick four features that look like having trends between these features and 
+Prosper Score and Loan Status from the graphs above. Holding Prosper Score 
+constant, high risk loans tend to have lower `ScorexChangeAtTimeOfListing` and 
+higher `Bank Card Utilization`, `DebtToInconeRatio` and 
+`ProsperPrincipalOutstanding`. It shows that I can construct a Logistic 
+Regression to predit the likelihood of a loan would be high risk or completed 
+by using `Status`(1 for high risk and 0 for completed loan) as target variable 
+and these 4 feature as the predictor variables.
+
+------
+
+# Reflection
+
+This Prosper loan data set roughly contains four kinds of loan data 
+information --- Loan Status, Borrower Data, Loan Information Data and Credit Risk Matrices during 2005 to 2014. I started by understanding some stories about 
+Prosper and exploring the individual variables related to my initial question of interest --- What factors are connected to defaulted/completed loan? And then 
+I found Prosper have improve their credit measurement system by Prosper Rating 
+from only using Credit Score before. And I continued to make observations on
+plots, then I make assumption that maybe Prosper put more weight of Prosper 
+Prosper Score than Credit Score in their Prosper Rating. I kept exploring 
+features related to Prosper Score and relationship between Prosper Score and
+these features and Loan Status. Eventually, I pick features that I observed that
+having some trends with Loan Status and Prosper Score. I created a Logistic model
+to predict the likelihood of a loan would be high risk or completed using these features.
+
+I found `Bank Card Utilization` and `Debt To Income Ratio` have strongest inverse 
+trend with Prosper Score. `ScoreX Change At Time Of Listing` and
+`Stated Monthly Income` have strongest positive trend with Prosper Score.
+And after investigating the relationship between status of loans and each related
+factor across each Prosepr Score, I found high risk loans tend to have higher `BankCardUtilization`, `DebtToIncomeRatio`, `ProsperPrincipalOutstanding`, 
+and have lower `ScorexChangeAtTimeOfListing`,  `IncomeRange` and 
+`StatedMonthlyIncome`, holding Prosper Score constant. 
+
+Finally, I picked all these features above except `IncomeRange` and `StatedMonthlyIncome` to build a Logistic Regression model to predict likelihood
+of one loan would be completed or high risk. And I also built two other models: 
+one only contains `CreditScoreAverage ` as predictor variable; the other use 
+`Prosper Score` as predictor variable. These three models present some predictive
+power for loan quality, but the power is weak. For model with four features, `BankCardUtilization`, `DebtToIncomeRatio` and `ScorexChangeAtTimeOfListing` 
+are the significant variables. The results suggest that they have association of 
+higher Bank Card Utilization, higher Debt To Income Ratio, and lower Scorex 
+Change of the borrower with the probability of being high risk. The other two
+models only consider the predictor of credit matrices--`CreditScoreAverage` and
+`Prosper Score`, and the results suggest that both predictors are significant and
+have higher AUC ratio than previous model. Seems like directly using these two 
+risk metrices is enough than using other four metrices at a time to predict a 
+loan be high risk or not. 
+
+I think there are still some of limitations that cause such a not good model:
+
+- Data duration: The duration of the data set is from 2006 to 2014, and it covers 
+the duration of financial crisis, which may cause the quality of loans and borrower condition be unstable. And this may cause the predict model be more inaccurate if
+I want to evaluate the loan status of today's market.
+
+- Data subset and cleaning: Since the data contains so many categories of data 
+type like borrower quality or time series data, it is appropriate to conduct a 
+data subset to have more precise data content. For example, we know there is a 
+financial crisis in 2008 which affects the whole borrower condition and quality 
+of loans, maybe it is more appropriate to subset this data set by post-crisis 
+years. Besides, I also didn't consider the outlier data in each feature to avoid irrelevant information, I just filled NA values with median in these three models.
+
+Still, I was impressed that I can use such abundant information of loan platform 
+data set and use R and RStudio to perform basic data exploration. Through the exploration process I do find some interesting pattern like the trend between
+loan status and `ScorexChangeAtTimeOfListing`. Unlike using Credit Score
+directly, it kind amazed me that using the change of Borrower's credit score 
+relative to the borrower's last Prosper loan can get a not bad predict ability. 
+It makes me think maybe using the data information about the platform loans has
+more reference value than directly using official credit data, if we want to 
+evaluate a peer to peer loan market not a traditional borrowing channel.
